@@ -1,0 +1,202 @@
+{
+  "app_name": "FrameWorks",
+  "personality": "3 Editorial Mobile LIGHT",
+  "personality_one_liner": "An elegant, gallery-like experience that uses generous whitespace, premium typography, and warm neutrals to frame memories as high-end art.",
+  "color": {
+    "surface": "#F9F9F7",
+    "onSurface": "#1C1B1A",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#1C1B1A",
+    "surfaceTertiary": "#EFEFEA",
+    "onSurfaceTertiary": "#1C1B1A",
+    "surfaceInverse": "#1C1B1A",
+    "onSurfaceInverse": "#F9F9F7",
+    "brand": "#1C1B1A",
+    "brandPrimary": "#1C1B1A",
+    "onBrandPrimary": "#F9F9F7",
+    "brandSecondary": "#8B7D72",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#E3DDD8",
+    "onBrandTertiary": "#1C1B1A",
+    "success": "#4A5D4E",
+    "onSuccess": "#FFFFFF",
+    "warning": "#C49A45",
+    "onWarning": "#1C1B1A",
+    "error": "#8C4A42",
+    "onError": "#FFFFFF",
+    "info": "#1C1B1A",
+    "onInfo": "#FFFFFF",
+    "border": "rgba(28, 27, 26, 0.08)",
+    "borderStrong": "rgba(28, 27, 26, 0.20)",
+    "divider": "rgba(28, 27, 26, 0.05)"
+  },
+  "typography": {
+    "displayFontFamily": "Cormorant Garamond",
+    "textFontFamily": "Satoshi",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous magazine-like rhythms. Let content breathe. Strict adherence to safe-area bounds. Forms and text grouped logically with clear separation.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 0,
+    "md": 6,
+    "lg": 12,
+    "pill": 999
+  },
+  "shadow_tier": "0",
+  "navigation": "stack_only",
+  "icon_set": "Feather",
+  "glassmorphism": {
+    "enabled": false,
+    "do's": [
+      "Avoid glass entirely to maintain the matte, editorial, printed-art feel."
+    ],
+    "dont's": [
+      "No blur on sticky headers or bottom sheets; rely on solid surfaceSecondary and thin border dividers."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "solid surfaceSecondary",
+      "android": "solid surfaceSecondary",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Onboarding",
+      "purpose": "Immerse the user in the luxury value proposition with gallery-like imagery and a clear call to action.",
+      "states": {
+        "loading": "Centered spinner",
+        "empty": "N/A",
+        "error": "N/A"
+      },
+      "layout": "Full-bleed hero images using edge-to-edge layout. Text (serif display) overlaid at the bottom 40% with a vertical gradient scrim (transparent to surfaceInverse) ensuring contrast. Sticky brandPrimary CTA button 'Create Your Art' at the bottom above safe-area."
+    },
+    {
+      "name": "CameraAndUpload",
+      "purpose": "Capture or select a photo to begin the framing process.",
+      "states": {
+        "loading": "Skeleton grid for gallery",
+        "empty": "Icon + 'No photos found' + CTA",
+        "error": "Toast 'Unable to access camera'"
+      },
+      "layout": "Large upper viewfinder/preview area (70% height). Bottom section handles gallery picking: horizontally scrollable thumbnails. Minimal UI chrome—thin 1px dividers, flat icons."
+    },
+    {
+      "name": "AIStyleSelection",
+      "purpose": "Apply AI artistic styles to the uploaded photo.",
+      "states": {
+        "loading": "Generating preview spinner over image",
+        "empty": "N/A",
+        "error": "Toast 'Style generation failed'"
+      },
+      "layout": "Top bar: Back, Title, Save. Main canvas dominates (large live preview). Bottom sheet: Horizontally scrollable thumbnails of style categories (Watercolor, Minimal, Luxury). Instant preview applied upon tap."
+    },
+    {
+      "name": "Editor",
+      "purpose": "Adjust crop, print size, and physical frame choices.",
+      "states": {
+        "loading": "Updating dimensions spinner",
+        "empty": "N/A",
+        "error": "N/A"
+      },
+      "layout": "Step-based layout. Live preview scales proportionally in the center. Bottom sheet expands for Frame picker (Wood, Metal, Acrylic) and Crop/Resize controls. A sticky 'Preview in Room' CTA at the bottom."
+    },
+    {
+      "name": "RoomPreview",
+      "purpose": "Visualize the framed artwork in realistic home environments.",
+      "states": {
+        "loading": "Loading 3D scene/image...",
+        "empty": "N/A",
+        "error": "N/A"
+      },
+      "layout": "Hero image of a living room wall with the generated framed art superimposed via drag/drop or pinch-to-zoom. Bottom row offers alternate room background thumbnails (living room, bedroom, hallway). Fixed sticky CTA 'Confirm Design'."
+    },
+    {
+      "name": "ProductAndCheckout",
+      "purpose": "Review material, final pricing, and pay.",
+      "states": {
+        "loading": "Processing payment...",
+        "empty": "Cart empty state",
+        "error": "Payment failed overlay"
+      },
+      "layout": "Editorial layout: Large final artwork image at the top. Generous vertical spacing. Pricing displayed in large serif font. Accordion sections for 'Materials' and 'Shipping'. Sticky full-width checkout button at the base."
+    },
+    {
+      "name": "Gallery",
+      "purpose": "View past orders and saved art projects.",
+      "states": {
+        "loading": "Skeleton grid",
+        "empty": "Illustration + 'Your gallery is empty' + 'Start creating'",
+        "error": "Retry fetching projects"
+      },
+      "layout": "Masonry or 2-column grid. Generous padding around images. Images wrapped in subtle borders to mimic frames. Clean typographic headers."
+    },
+    {
+      "name": "AdminDashboard",
+      "purpose": "Overview of recent orders, revenue, and uploads for store owners.",
+      "states": {
+        "loading": "Skeleton list",
+        "empty": "No recent orders",
+        "error": "Error fetching stats"
+      },
+      "layout": "Text-heavy brutalist-leaning editorial list. Large serif numbers for metrics (Revenue, Orders). Simple list rows with order IDs and status tags using brandTertiary."
+    }
+  ],
+  "images": {
+    "room_mockup_living_room": {
+      "url": "https://images.unsplash.com/photo-1562368764-651b0bba96af?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzF8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBtaW5pbWFsaXN0JTIwbGl2aW5nJTIwcm9vbSUyMGJsYW5rJTIwd2FsbHxlbnwwfHx8fDE3ODUzOTU4NDF8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Modern minimalist living room blank wall"
+    },
+    "room_mockup_minimal": {
+      "url": "https://images.unsplash.com/photo-1625585598750-3535fe40efb3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzF8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjBtaW5pbWFsaXN0JTIwbGl2aW5nJTIwcm9vbSUyMGJsYW5rJTIwd2FsbHxlbnwwfHx8fDE3ODUzOTU4NDF8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "White round table near white wall"
+    },
+    "sample_art_abstract": {
+      "url": "https://images.unsplash.com/photo-1618331833071-ce81bd50d300?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGNhbnZhcyUyMHdhbGwlMjBhcnR8ZW58MHx8fHwxNzg1Mzk1ODQxfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Blue white and yellow abstract painting"
+    },
+    "sample_art_bw": {
+      "url": "https://images.unsplash.com/photo-1610621062045-ef5f7201bb3f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjh8MHwxfHNlYXJjaHwxfHxibGFjayUyMGFuZCUyMHdoaXRlJTIwZmluZSUyMGFydCUyMHBob3RvZ3JhcGh5fGVufDB8fHx8MTc4NTM5NTg0MXww&ixlib=rb-4.1.0&q=85",
+      "alt": "Grayscale photo of bare tree"
+    }
+  },
+  "haptics": {
+    "events": {
+      "on_style_select": "light",
+      "on_crop_adjust": "selection",
+      "on_frame_select": "medium",
+      "on_primary_cta": "medium",
+      "on_art_placement_drop": "heavy"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly adhere to the Editorial Mobile LIGHT personality. This app must feel like a premium, high-end gallery.",
+    "Do NOT use glassmorphism. The aesthetic relies on matte solid surfaces and distinct typographic hierarchy.",
+    "Ensure the Onboarding screen utilizes a full-bleed hero image with a correct 3-stop vertical gradient scrim to guarantee text contrast. Ensure CTA is pinned to the bottom.",
+    "Use Cormorant Garamond for display/headings and Satoshi for body. Maintain weight caps (max 500) and use size for hierarchy.",
+    "Implement the Editor/Mockup flow as a step-based layout using Bottom Sheets for tool selection (styles, frames, rooms).",
+    "Whenever creating an 'Empty' or 'Loading' state, ensure they fill the screen (flex: 1) appropriately.",
+    "For the Room Preview, use the provided room images and overlay the user's framed art in the center to simulate real-world scale."
+  ]
+}

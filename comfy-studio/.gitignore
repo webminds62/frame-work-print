@@ -1,0 +1,13 @@
+node_modules
+.DS_Store
+app
+cache
+logs
+studio/env
+studio/__pycache__
+studio/**/__pycache__
+studio/jobs.jsonl
+studio/uploads
+AMD Ai One/STUDIO-URL.txt
+AMD Ai One/clips
+workflows/ComfyUI_examples

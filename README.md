@@ -84,3 +84,6 @@ Never put the server API key in the Expo environment or commit it to GitHub.
 
 Do not publish or switch to Stripe live mode until test-mode payments, webhook retries, refunds,
 Printful fulfillment, account deletion, and restore/error scenarios have been verified end-to-end.
+
+
+- `comfy-studio/` — Pinokio ComfyUI Studio launcher

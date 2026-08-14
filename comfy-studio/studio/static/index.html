@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Studio</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark"></span>
+        <div>
+          <strong>Studio</strong>
+          <span class="sub">Local cinematic generation</span>
+        </div>
+      </div>
+      <div class="status" id="health">Checking backend…</div>
+    </header>
+
+    <main class="layout">
+      <section class="panel controls">
+        <p class="next" id="next">Type a prompt, keep Text to Video + Wan 2.1 1.3B, then click Generate. The first fox clip is already in the gallery.</p>
+        <div class="modes" id="modes">
+          <button data-mode="t2v" class="active">Text to Video</button>
+          <button data-mode="i2v">Image to Video</button>
+          <button data-mode="still">Still</button>
+        </div>
+
+        <label class="field">
+          <span>Model</span>
+          <select id="model"></select>
+          <small id="model-note"></small>
+        </label>
+
+        <label class="field">
+          <span>Download models</span>
+          <div class="row">
+            <select id="download-pack"></select>
+            <button class="ghost" id="download-go" type="button">Download</button>
+          </div>
+          <small id="download-note"></small>
+        </label>
+
+        <label class="field">
+          <span>Prompt</span>
+          <textarea id="prompt" rows="6" placeholder="Type a short idea, record voice, or leave empty and click Generate prompt"></textarea>
+          <button class="ghost" id="prompt-go" type="button">Generate prompt</button>
+          <div class="row">
+            <button class="ghost" id="record-go" type="button">Record voice</button>
+            <button class="ghost" id="audio-go" type="button">Upload audio</button>
+          </div>
+          <input id="audio" type="file" accept="audio/*,video/*,.wav,.mp3,.webm,.m4a,.mp4" hidden />
+          <small id="transcribe-note">Uses Lemonade Whisper-Large-v3-Turbo.</small>
+        </label>
+
+        <label class="field">
+          <span>Negative</span>
+          <textarea id="negative" rows="2" placeholder="Optional"></textarea>
+        </label>
+
+        <div class="drop" id="drop">
+          <input id="image" type="file" accept="image/*" />
+          <div class="drop-copy">
+            <strong>Start frame / character still</strong>
+            <span>Drop an image, or generate a still first and send it here.</span>
+          </div>
+          <img id="preview-image" alt="" hidden />
+        </div>
+
+        <div class="row">
+          <label class="field">
+            <span>Camera</span>
+            <select id="camera"></select>
+          </label>
+          <label class="field">
+            <span>Format</span>
+            <select id="format"></select>
+          </label>
+        </div>
+
+        <div class="row">
+          <label class="field">
+            <span>Duration</span>
+            <select id="duration"></select>
+          </label>
+          <label class="field">
+            <span>Quality</span>
+            <select id="quality"></select>
+          </label>
+        </div>
+        <label class="field">
+          <span>Seed</span>
+          <input id="seed" type="text" placeholder="random" />
+        </label>
+
+        <label class="toggle">
+          <input id="cinematic" type="checkbox" checked />
+          <span>Cinematic enhance</span>
+        </label>
+        <label class="toggle">
+          <input id="refine" type="checkbox" checked />
+          <span>Final render (2x upscale)</span>
+        </label>
+        <p class="hint" id="refine-hint"></p>
+        <p class="hint" id="camera-hint"></p>
+
+        <div class="actions">
+          <button class="generate" id="generate">Generate</button>
+          <button class="cancel" id="cancel" type="button" hidden>Cancel</button>
+        </div>
+      </section>
+
+      <section class="panel stage">
+        <div class="stage-frame" id="stage">
+          <div class="empty" id="empty-stage">
+            <p>Your next clip lands here.</p>
+            <span>Wan 1.3B, LTX, and Flux Schnell are wired to this machine.</span>
+          </div>
+        </div>
+        <div class="job" id="job" hidden>
+          <div id="job-text"></div>
+          <div class="bar" id="job-bar" hidden><span></span></div>
+        </div>
+      </section>
+
+      <section class="panel gallery">
+        <div class="gallery-head">
+          <h2>Gallery</h2>
+          <button class="ghost" id="refresh">Refresh</button>
+        </div>
+        <div class="gallery-grid" id="gallery"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AMD Ai One
+Comment=Open the local AMD Ai One studio
+Exec="/home/mark/pinokio/api/comfy.git/AMD Ai One/Open-Studio.sh"
+Icon=/home/mark/pinokio/api/comfy.git/icon.jpeg
+Terminal=false
+Categories=Graphics;AudioVideo;

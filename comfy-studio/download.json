@@ -1,9 +1,0 @@
-{
-  "run": [{
-    "method": "fs.download",
-    "params": {
-      "uri": "{{input.url}}",
-      "dir": "{{input.path}}"
-    }
-  }]
-}

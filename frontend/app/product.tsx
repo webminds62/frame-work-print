@@ -5,7 +5,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import FlowHeader from "@/src/components/FlowHeader";
+import MultiPanelPreview from "@/src/components/MultiPanelPreview";
 import { getProject } from "@/src/store";
+import { TIER_META, type CollectionTier } from "@/src/catalog/store_skus";
 import { colors, spacing, radius, font, serif, PANELS } from "@/src/theme";
 
 export default function Product() {
@@ -14,11 +16,22 @@ export default function Product() {
   const project = getProject();
 
   if (!project) return null;
+
   const panelCount = PANELS.find((panel) => panel.key === project.panel_key)?.count || 1;
   const visualization = project.room_preview || project.current;
-  const printPrice = project.price || (project.printful_retail_price || 0) * panelCount;
+  const printPrice = project.price || 0;
+  const ready = !!(project.store_variant_id || project.store_family_name || printPrice > 0);
+  const tierLabel = project.store_tier
+    ? TIER_META[project.store_tier as CollectionTier]?.label || ""
+    : "";
+  const frameName = project.store_family_name || project.printful_variant_name || "Your frame";
+  const frameImage = project.store_image || project.printful_variant_image || "";
+
   const checkout = () => {
-    if (!project.printful_variant_id) return;
+    if (!ready) {
+      router.push("/(tabs)/store");
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     router.push("/checkout");
   };
@@ -29,83 +42,121 @@ export default function Product() {
       <ScrollView contentContainerStyle={styles.body}>
         <View>
           <Text style={styles.sectionLabel}>Artwork visualization</Text>
-          <Text style={styles.sectionHelp}>Room previews help with scale; the product choice below controls fulfillment.</Text>
-        </View>
-        <Image source={{ uri: visualization }} style={styles.hero} contentFit="cover" testID="product-hero" />
-
-        <View>
-          <Text style={styles.sectionLabel}>Your Printful product</Text>
-          <Text style={styles.sectionHelp}>Official catalog product that will be sent to fulfillment</Text>
-        </View>
-        <View style={styles.productCard} testID="exact-printful-product">
-          {!!project.printful_variant_image && (
-            <Image source={{ uri: project.printful_variant_image }} style={styles.productImage} contentFit="cover" />
+          {project.room_preview ? (
+            <Image source={{ uri: visualization }} style={styles.hero} contentFit="cover" />
+          ) : (
+            <View style={styles.previewWrap}>
+              <MultiPanelPreview
+                image={project.current}
+                count={panelCount}
+                frameKey={project.frame || "wood"}
+                material={project.material === "canvas" ? "canvas" : "poster"}
+                width={300}
+                height={280}
+              />
+            </View>
           )}
-          <View style={styles.productBody}>
-            <View style={styles.verifiedRow}>
-              <Feather name="check-circle" size={16} color={colors.success} />
-              <Text style={styles.verifiedText}>Exact catalog variant selected</Text>
-            </View>
-            <Text style={styles.productName}>{project.printful_variant_name || "Printful wall art"}</Text>
-            <Text style={styles.variantId}>Printful variant #{project.printful_variant_id}</Text>
-            <View style={styles.details}>
-              <Detail label="Product" value={project.printful_variant_name || "Printful wall art"} />
-              <Detail label="Size" value={(project.size || "").replace("x", '" × ') + '"'} />
-              <Detail label="Finish" value={(project.frame || "").replace("red_oak", "Red Oak").replace("brown", "Brown").replace("black", "Black").replace("white", "White").replace("none", "Unframed")} />
-              <Detail label="Quantity" value={String(panelCount)} />
-            </View>
+        </View>
+
+        <Text style={styles.sectionLabel}>Your gallery frame</Text>
+        <View style={styles.productCard} testID="store-product-card">
+          {!!frameImage && (
+            <Image source={{ uri: frameImage }} style={styles.productImage} contentFit="cover" />
+          )}
+          <View style={{ flex: 1, gap: 4 }}>
+            {!!tierLabel && <Text style={styles.tier}>{tierLabel}</Text>}
+            <Text style={styles.productName}>{frameName}</Text>
+            <Text style={styles.metaLine}>
+              {project.size}
+              {panelCount > 1 ? ` · ${panelCount}-panel` : ""}
+              {project.has_mat ? " · Museum mat" : ""}
+            </Text>
+            <Text style={styles.price}>${printPrice.toFixed(2)}</Text>
           </View>
         </View>
 
-        <View style={styles.fulfillmentNote}>
-          <Feather name="shield" size={18} color={colors.brandSecondary} />
-          <Text style={styles.fulfillmentText}>Checkout preserves variant #{project.printful_variant_id}; the server rejects any mismatched product, size, or finish.</Text>
+        <Pressable testID="change-frame-review" style={styles.linkRow} onPress={() => router.push("/(tabs)/store")}>
+          <Feather name="aperture" size={16} color={colors.brandSecondary} />
+          <Text style={styles.linkText}>Change frame in Store</Text>
+        </Pressable>
+
+        <View style={styles.note}>
+          <Feather name="info" size={16} color={colors.success} />
+          <Text style={styles.noteText}>
+            Frame chosen from the Frame Works gallery. Room preview uses your photo without altering the print file.
+          </Text>
         </View>
       </ScrollView>
 
       <View style={[styles.ctaBar, { paddingBottom: insets.bottom + spacing.sm }]}>
-        <View>
-          <Text style={styles.priceLabel}>Print price</Text>
-          <Text style={styles.price} testID="product-price">${printPrice.toFixed(2)}</Text>
-          <Text style={styles.shipping}>Shipping calculated next</Text>
-        </View>
-        <Pressable testID="checkout-button" style={[styles.cta, !project.printful_variant_id && styles.disabled]}
-          onPress={checkout} disabled={!project.printful_variant_id}>
-          <Text style={styles.ctaText}>Checkout</Text>
+        <Pressable
+          testID="checkout-button"
+          style={[styles.cta, !ready && styles.disabled]}
+          onPress={checkout}
+          disabled={!ready}
+        >
+          <Text style={styles.ctaText}>
+            {ready ? `Continue to checkout · $${printPrice.toFixed(2)}` : "Pick a frame first"}
+          </Text>
         </Pressable>
       </View>
     </View>
   );
 }
 
-function Detail({ label, value }: { label: string; value: string }) {
-  return <View style={styles.detailRow}><Text style={styles.detailLabel}>{label}</Text><Text style={styles.detailValue}>{value}</Text></View>;
-}
-
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
   body: { padding: spacing.xl, gap: spacing.lg },
-  sectionLabel: { fontSize: font.sm, fontWeight: "700", color: colors.onSurfaceTertiary, textTransform: "uppercase", letterSpacing: 1 },
-  sectionHelp: { fontSize: font.sm, lineHeight: 18, color: colors.muted, marginTop: spacing.xs },
-  hero: { width: "100%", aspectRatio: 4 / 3, borderRadius: radius.lg, backgroundColor: colors.surfaceTertiary },
-  productCard: { borderRadius: radius.lg, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surfaceSecondary, overflow: "hidden" },
-  productImage: { width: "100%", height: 210, backgroundColor: colors.surfaceTertiary },
-  productBody: { padding: spacing.lg, gap: spacing.sm },
-  verifiedRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  verifiedText: { fontSize: font.sm, color: colors.success, fontWeight: "700" },
-  productName: { fontSize: font.xl, fontFamily: serif, color: colors.onSurface, marginTop: spacing.xs },
-  variantId: { fontSize: font.sm, color: colors.muted },
-  details: { marginTop: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border },
-  detailRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
-  detailLabel: { fontSize: font.base, color: colors.onSurfaceTertiary },
-  detailValue: { fontSize: font.base, fontWeight: "700", color: colors.onSurface, textTransform: "capitalize" },
-  fulfillmentNote: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border },
-  fulfillmentText: { flex: 1, fontSize: font.sm, lineHeight: 18, color: colors.onSurfaceTertiary },
-  ctaBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: spacing.xl, paddingTop: spacing.md, backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.border },
-  priceLabel: { fontSize: font.sm, color: colors.muted },
-  price: { fontSize: font["2xl"], fontFamily: serif, color: colors.onSurface },
-  shipping: { fontSize: 10, color: colors.muted },
-  cta: { backgroundColor: colors.brand, height: 56, borderRadius: radius.md, alignItems: "center", justifyContent: "center", paddingHorizontal: spacing["2xl"] },
-  ctaText: { color: colors.onBrand, fontSize: font.lg, fontWeight: "600" },
+  sectionLabel: {
+    fontSize: font.sm,
+    fontWeight: "700",
+    color: colors.onSurfaceTertiary,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    marginBottom: spacing.sm,
+  },
+  hero: { width: "100%", height: 320, borderRadius: radius.lg, backgroundColor: colors.surfaceTertiary },
+  previewWrap: { alignItems: "center", paddingVertical: spacing.md },
+  productCard: {
+    flexDirection: "row",
+    gap: spacing.md,
+    padding: spacing.md,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+  },
+  productImage: { width: 72, height: 90, borderRadius: radius.sm, backgroundColor: colors.surfaceTertiary },
+  tier: { fontSize: 11, fontWeight: "700", color: colors.success, letterSpacing: 0.8, textTransform: "uppercase" },
+  productName: { fontSize: font.lg, fontWeight: "700", color: colors.onSurface },
+  metaLine: { fontSize: font.sm, color: colors.onSurfaceTertiary },
+  price: { fontSize: font.xl, fontWeight: "700", color: colors.onSurface, marginTop: 4 },
+  linkRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  linkText: { color: colors.brandSecondary, fontWeight: "600", fontSize: font.base },
+  note: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    padding: spacing.md,
+    backgroundColor: "rgba(74,93,78,0.08)",
+    borderRadius: radius.md,
+    alignItems: "flex-start",
+  },
+  noteText: { flex: 1, fontSize: font.sm, color: colors.onSurfaceTertiary, lineHeight: 18 },
+  ctaBar: {
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  cta: {
+    backgroundColor: colors.brand,
+    height: 56,
+    borderRadius: radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   disabled: { opacity: 0.4 },
+  ctaText: { color: colors.onBrand, fontSize: font.lg, fontWeight: "600" },
 });

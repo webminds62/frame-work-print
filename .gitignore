@@ -96,3 +96,4 @@ android-sdk/
 credentials.json
 *.key
 .credentials
+tools/out/

@@ -3,7 +3,8 @@ import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { StripeProvider } from "@stripe/stripe-react-native";
+import { StripeProvider } from "@/src/lib/stripe";
+
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider } from "@/src/context/AuthContext";
@@ -32,7 +33,6 @@ export default function RootLayout() {
             <Stack.Screen name="login" />
             <Stack.Screen name="register" />
             <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="style" />
             <Stack.Screen name="crop" />
             <Stack.Screen name="editor" />
             <Stack.Screen name="room" />

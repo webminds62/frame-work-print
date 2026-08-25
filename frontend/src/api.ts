@@ -11,41 +11,60 @@ export type AIPreviewResponse = {
   notices: string[];
 };
 
-export type PrintQualityResponse = {
-  score: number;
-  rating: "Great" | "Good" | "Fair" | "Needs attention";
-  width: number;
-  height: number;
-  recommended_sizes: string[];
-  issues: string[];
+
+
+
+export type StoreCatalogFamily = {
+  id: string;
+  name: string;
+  tagline: string;
+  tier: "essential" | "gallery" | "atelier";
+  tier_rank: 1 | 2 | 3;
+  material: "poster" | "framed" | "canvas";
+  frame_key: string;
+  preview_frame: string;
+  has_mat: boolean;
+  base_price: number;
+  image: string;
+  swatch: string;
+  size_keys: string[];
 };
 
-export type PrintfulCatalogVariant = {
-  id: number;
-  product_id: number;
-  product_name: string;
-  material: "canvas" | "poster";
+export type StoreCatalogVariant = {
+  id: string;
+  family_id: string;
+  family_name: string;
+  tagline: string;
+  tier: "essential" | "gallery" | "atelier";
+  tier_rank: 1 | 2 | 3;
+  material: "poster" | "framed" | "canvas";
+  frame_key: string;
+  preview_frame: string;
+  has_mat: boolean;
   size_key: string;
   size_label: string;
-  finish_key: string;
-  finish_label: string;
-  catalog_price: number;
+  orientation: "portrait" | "landscape" | "square";
+  wall_hint: string;
   retail_price: number;
-  currency: string;
   image: string;
-  name: string;
-  framed: boolean;
-  in_stock: boolean;
+  swatch: string;
+  panel_key: string;
+  prodigi_sku?: string;
+  prodigi_attributes?: Record<string, string>;
 };
 
-export type PrintfulCatalogResponse = {
-  variants: PrintfulCatalogVariant[];
-  source: "printful_live" | "verified_snapshot";
-  synced_at: string;
-  orders_configured: boolean;
-  store_context_configured: boolean;
-  markup: number;
-  note: string;
+export type StoreCatalogResponse = {
+  version: number;
+  source: string;
+  fulfillment: string;
+  prodigi_configured: boolean;
+  tier_meta: Record<string, { label: string; blurb: string; rank: number }>;
+  sizes: Array<{ key: string; label: string; orientation: string; wall_hint: string; mult: number }>;
+  families: StoreCatalogFamily[];
+  variants: StoreCatalogVariant[];
+  variant_count: number;
+  family_count: number;
+  note?: string;
 };
 
 async function authHeaders() {
@@ -75,13 +94,11 @@ export const api = {
     request("/auth/apple", { method: "POST", body: JSON.stringify({ identity_token, name, email }) }, false),
   me: () => request("/auth/me"),
   deleteAccount: () => request("/auth/me", { method: "DELETE" }),
-  transform: (image_base64: string, style: string, enhance: boolean, remove_bg: boolean) =>
-    request<AIPreviewResponse>("/transform", { method: "POST", body: JSON.stringify({ image_base64, style, enhance, remove_bg }) }),
   roomPreview: (image_base64: string, room: string, frame: string, material: string, panels: number = 1) =>
     request<AIPreviewResponse>("/room-preview", { method: "POST", body: JSON.stringify({ image_base64, room, frame, material, panels }) }),
-  printQuality: (image_base64: string) =>
-    request<PrintQualityResponse>("/print-quality", { method: "POST", body: JSON.stringify({ image_base64 }) }),
-  printfulCatalog: () => request<PrintfulCatalogResponse>("/printful/catalog"),
+  prodigiStatus: () => request("/prodigi/status"),
+  storeCatalog: () => request<StoreCatalogResponse>("/catalog/store", {}, false),
+  prodigiQuote: (p: any) => request("/prodigi/quote", { method: "POST", body: JSON.stringify(p) }),
   saveProject: (p: any) => request("/projects", { method: "POST", body: JSON.stringify(p) }),
   listProjects: () => request("/projects"),
   deleteProject: (id: string) => request(`/projects/${id}`, { method: "DELETE" }),

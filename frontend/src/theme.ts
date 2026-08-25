@@ -30,16 +30,6 @@ export const font = { sm: 12, base: 14, lg: 16, xl: 20, "2xl": 24, "3xl": 32, "4
 // Editorial serif for display via system fonts (no google-fonts package).
 export const serif = Platform.select({ ios: "Georgia", android: "serif", default: "Georgia" });
 
-export const STYLES = [
-  { key: "canvas", label: "Canvas" },
-  { key: "watercolor", label: "Watercolor" },
-  { key: "bw", label: "B&W Fine Art" },
-  { key: "abstract", label: "Abstract" },
-  { key: "minimal", label: "Minimal" },
-  { key: "luxury", label: "Luxury" },
-  { key: "gallery", label: "Gallery" },
-];
-
 export const ROOMS = [
   { key: "living_room", label: "Living Room" },
   { key: "bedroom", label: "Bedroom" },

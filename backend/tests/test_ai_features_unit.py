@@ -7,10 +7,8 @@ from PIL import Image, ImageDraw
 
 from ai_features import (
     ROOM_ASSETS,
-    analyze_print_quality,
     decode_image,
     demo_room_preview,
-    demo_transform,
     generation_cache_key,
 )
 
@@ -24,19 +22,6 @@ def image_uri(width: int = 640, height: int = 480) -> str:
     output = io.BytesIO()
     image.save(output, format="PNG")
     return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii")
-
-
-@pytest.mark.parametrize("style", ["gallery", "watercolor", "bw", "abstract", "minimal", "luxury", "canvas"])
-def test_demo_transform_returns_valid_image_without_provider(style):
-    result, notices = demo_transform(image_uri(), style, enhance=True, remove_bg=False)
-    assert result.startswith("data:image/png;base64,")
-    assert decode_image(result).size == (640, 480)
-    assert "no cloud AI call" in notices[0]
-
-
-def test_demo_background_cleanup_is_labeled_as_approximation():
-    _, notices = demo_transform(image_uri(), "gallery", enhance=True, remove_bg=True)
-    assert any("approximates background cleanup" in notice for notice in notices)
 
 
 @pytest.mark.parametrize("panels", [1, 3, 4])
@@ -74,21 +59,6 @@ def test_glossy_metal_room_preview_is_not_rendered_as_a_wood_frame():
     wood = decode_image(demo_room_preview(image_uri(), "living_room", "wood", "canvas", 1)[0])
     metal = decode_image(demo_room_preview(image_uri(), "living_room", "metal", "metal", 1)[0])
     assert hashlib.sha256(wood.tobytes()).hexdigest() != hashlib.sha256(metal.tobytes()).hexdigest()
-
-
-def test_print_quality_recommends_sizes_supported_by_pixels():
-    result = analyze_print_quality(image_uri(1800, 2400))
-    assert result["width"] == 1800
-    assert result["height"] == 2400
-    assert "12x16" in result["recommended_sizes"]
-    assert "18x24" not in result["recommended_sizes"]
-
-
-def test_print_quality_warns_for_small_images():
-    result = analyze_print_quality(image_uri(500, 500))
-    assert result["score"] < 70
-    assert result["recommended_sizes"] == []
-    assert any("Low resolution" in issue for issue in result["issues"])
 
 
 def test_cache_key_is_stable_and_option_sensitive():

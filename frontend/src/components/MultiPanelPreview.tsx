@@ -34,7 +34,16 @@ const FRAME_VISUALS: Record<string, Record<string, FrameVisual>> = {
 
 export function getFrameVisual(material: string, frameKey: string): FrameVisual {
   const palette = FRAME_VISUALS[material] || FRAME_VISUALS.canvas;
-  const normalizedFrame = frameKey === "brown" || frameKey === "red_oak" ? "wood" : frameKey;
+  let normalizedFrame = frameKey;
+  if (frameKey === "brown" || frameKey === "red_oak" || frameKey === "oak" || frameKey === "oak_deep" || frameKey === "oak_float" || frameKey === "walnut") {
+    normalizedFrame = "wood";
+  } else if (frameKey === "black_float" || frameKey === "black_deep") {
+    normalizedFrame = "black";
+  }
+  // Walnut gets a deeper wood face when available via canvas/poster wood slot override
+  if (frameKey === "walnut" && palette.wood) {
+    return { ...palette.wood, face: "#5C4033", bevel: "#8B6914", edge: "#3E2723" };
+  }
   return palette[normalizedFrame] || palette.wood || FRAME_VISUALS.canvas.none;
 }
 

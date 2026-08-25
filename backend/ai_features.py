@@ -9,16 +9,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps, ImageStat
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_DEMO_EDGE = 1400
-PRINT_SIZES = {
-    "12x16": (12, 16),
-    "18x24": (18, 24),
-    "24x36": (24, 36),
-    "30x40": (30, 40),
-}
 
 ROOM_ASSET_DIR = Path(__file__).resolve().parent / "assets" / "rooms"
 ROOM_ASSETS = {
@@ -64,61 +58,6 @@ def _bounded(image: Image.Image, max_edge: int = MAX_DEMO_EDGE) -> Image.Image:
     return copy
 
 
-def _simple_background_cleanup(image: Image.Image) -> Image.Image:
-    """Approximate a neutral backdrop using distance from the corner color."""
-    rgb = image.convert("RGB")
-    width, height = rgb.size
-    corners = [
-        rgb.getpixel((0, 0)),
-        rgb.getpixel((width - 1, 0)),
-        rgb.getpixel((0, height - 1)),
-        rgb.getpixel((width - 1, height - 1)),
-    ]
-    background = tuple(sum(pixel[channel] for pixel in corners) // 4 for channel in range(3))
-    mask = Image.new("L", rgb.size)
-    mask.putdata([
-        0 if sum((channel - background[index]) ** 2 for index, channel in enumerate(pixel)) < 2600 else 255
-        for pixel in rgb.get_flattened_data()
-    ])
-    mask = mask.filter(ImageFilter.MedianFilter(5)).filter(ImageFilter.GaussianBlur(2))
-    neutral = Image.new("RGB", rgb.size, (244, 242, 238))
-    return Image.composite(rgb, neutral, mask)
-
-
-def demo_transform(image_base64: str, style: str, enhance: bool, remove_bg: bool) -> tuple[str, list[str]]:
-    """Create a local style approximation for zero-cost UX testing."""
-    image = _bounded(decode_image(image_base64))
-    notices: list[str] = []
-    if remove_bg:
-        image = _simple_background_cleanup(image)
-        notices.append("Demo mode approximates background cleanup; verify production subject masking separately.")
-    if enhance:
-        image = ImageOps.autocontrast(image, cutoff=1)
-        image = ImageEnhance.Contrast(image).enhance(1.06)
-        image = ImageEnhance.Sharpness(image).enhance(1.15)
-
-    if style == "watercolor":
-        image = image.filter(ImageFilter.SMOOTH_MORE).filter(ImageFilter.ModeFilter(5))
-        image = ImageEnhance.Color(ImageOps.posterize(image, 5)).enhance(1.08)
-    elif style == "bw":
-        image = ImageOps.autocontrast(ImageOps.grayscale(image)).convert("RGB")
-    elif style == "abstract":
-        image = ImageEnhance.Color(ImageOps.posterize(image, 4)).enhance(1.35).filter(ImageFilter.SMOOTH)
-    elif style == "minimal":
-        image = ImageOps.posterize(image.filter(ImageFilter.GaussianBlur(1.2)), 4)
-        image = ImageEnhance.Contrast(image).enhance(0.9)
-    elif style == "luxury":
-        image = Image.blend(image, Image.new("RGB", image.size, (205, 168, 120)), 0.08)
-        image = ImageEnhance.Color(ImageEnhance.Contrast(image).enhance(1.12)).enhance(1.1)
-    elif style == "canvas":
-        image = ImageEnhance.Color(image.filter(ImageFilter.DETAIL)).enhance(0.95)
-    else:
-        image = ImageEnhance.Sharpness(ImageEnhance.Color(image).enhance(1.04)).enhance(1.1)
-
-    notices.insert(0, "Local demo preview: no cloud AI call or API charge was made.")
-    return encode_png(image), notices
-
-
 def demo_room_preview(
     image_base64: str,
     room: str,
@@ -142,20 +81,46 @@ def demo_room_preview(
     gap = 18
     panel_width = (total_width - gap * (panel_count - 1)) // panel_count
     x0 = (scene.width - total_width) // 2
+    # Normalize gallery store finishes -> paint keys
+    finish_aliases = {
+        "oak": "wood", "oak_deep": "wood", "oak_float": "wood",
+        "brown": "wood", "red_oak": "wood", "natural": "wood",
+        "walnut": "walnut",
+        "black": "black", "black_deep": "black", "black_float": "black",
+        "white": "white", "none": "none", "metal": "metal",
+        "wood": "wood",
+    }
     frame_colors = {
-        "black": (27, 26, 25), "white": (247, 244, 236),
-        "wood": (168, 113, 69), "brown": (126, 82, 49),
-        "red_oak": (183, 124, 77), "none": (225, 220, 211),
+        "black": (23, 22, 21),
+        "white": (247, 244, 236),
+        "wood": (196, 165, 116),       # natural oak
+        "walnut": (92, 64, 51),        # deep walnut
+        "brown": (126, 82, 49),
+        "red_oak": (183, 124, 77),
+        "none": (225, 220, 211),
         "metal": (192, 198, 202),
     }
     frame_outlines = {
-        "black": (4, 4, 4), "white": (166, 158, 146),
-        "wood": (100, 66, 38), "brown": (73, 46, 28),
-        "red_oak": (112, 72, 43), "none": (225, 220, 211),
+        "black": (5, 5, 5),
+        "white": (166, 158, 146),
+        "wood": (120, 90, 55),
+        "walnut": (55, 35, 28),
+        "brown": (73, 46, 28),
+        "red_oak": (112, 72, 43),
+        "none": (225, 220, 211),
         "metal": (83, 91, 96),
     }
-    preview_finish = "metal" if material == "metal" else frame
-    border = 6 if preview_finish == "metal" else 0 if preview_finish == "none" else 18
+    # Deeper profiles get a thicker moulding so Atelier reads premium on the wall
+    deep = frame in {"oak_deep", "black_deep", "walnut", "oak_float", "black_float"}
+    preview_finish = "metal" if material == "metal" else finish_aliases.get(frame or "wood", frame or "wood")
+    if material == "canvas" and preview_finish == "none":
+        border = 0
+    elif preview_finish == "none":
+        border = 0
+    elif preview_finish == "metal":
+        border = 6
+    else:
+        border = 28 if deep else 18
     fitted = ImageOps.fit(artwork, (total_width, total_height), method=Image.Resampling.LANCZOS)
 
     # Soft shadows make each panel sit naturally against the photographed wall.
@@ -177,52 +142,32 @@ def demo_room_preview(
         crop = fitted.crop((left, 0, left + panel_width, total_height))
         px = x0 + left
         if border:
+            # Outer moulding
             draw.rectangle(
                 (px - border, y0 - border, px + panel_width + border, y0 + total_height + border),
                 fill=frame_colors.get(preview_finish, frame_colors["wood"]),
                 outline=frame_outlines.get(preview_finish, frame_outlines["wood"]),
                 width=3,
             )
+            # Inner bevel highlight
+            bevel = 4
+            draw.rectangle(
+                (px - border + bevel, y0 - border + bevel,
+                 px + panel_width + border - bevel, y0 + total_height + border - bevel),
+                outline=(255, 255, 255, 40) if preview_finish != "black" else (70, 70, 70),
+                width=2,
+            )
+            # Museum mat for paper prints (not canvas wrap / frameless)
+            mat = 14 if material != "canvas" and preview_finish != "none" else 0
+            if mat:
+                draw.rectangle(
+                    (px - mat, y0 - mat, px + panel_width + mat, y0 + total_height + mat),
+                    fill=(245, 242, 235),
+                    outline=(220, 214, 204),
+                    width=1,
+                )
         scene.paste(crop, (px, y0))
     return encode_png(scene), ["Photorealistic local room preview: no cloud AI call or API charge was made."]
-
-
-def analyze_print_quality(image_base64: str) -> dict[str, Any]:
-    """Return a simple, explainable print-readiness assessment."""
-    image = decode_image(image_base64)
-    width, height = image.size
-    short_px, long_px = sorted((width, height))
-    score = 100
-    issues: list[str] = []
-    if short_px < 1200:
-        score -= 35
-        issues.append("Low resolution may look soft in larger prints.")
-    elif short_px < 1800:
-        score -= 15
-        issues.append("Resolution is suitable for smaller prints; inspect larger sizes carefully.")
-
-    sample = _bounded(image, 512).convert("L")
-    edge_variance = ImageStat.Stat(sample.filter(ImageFilter.FIND_EDGES)).var[0]
-    brightness = ImageStat.Stat(sample).mean[0]
-    if edge_variance < 180:
-        score -= 20
-        issues.append("The image may be blurred or lack fine detail.")
-    if brightness < 45:
-        score -= 10
-        issues.append("The image is very dark and may print with lost shadow detail.")
-    elif brightness > 225:
-        score -= 10
-        issues.append("The image is very bright and may lose highlight detail.")
-
-    recommended = [
-        label for label, dimensions in PRINT_SIZES.items()
-        if short_px >= min(dimensions) * 150 and long_px >= max(dimensions) * 150
-    ]
-    if not recommended:
-        issues.append("Use a higher-resolution original before ordering a standard print size.")
-    score = max(0, min(score, 100))
-    rating = "Great" if score >= 85 else "Good" if score >= 65 else "Fair" if score >= 45 else "Needs attention"
-    return {"score": score, "rating": rating, "width": width, "height": height, "recommended_sizes": recommended, "issues": issues}
 
 
 def generation_cache_key(operation: str, image_base64: str, options: dict[str, Any]) -> str:

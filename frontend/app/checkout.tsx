@@ -4,7 +4,8 @@ import {
   KeyboardAvoidingView, Platform, ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
-import { useStripe } from "@stripe/stripe-react-native";
+import { useStripe } from "@/src/lib/stripe";
+
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
@@ -43,7 +44,8 @@ export default function Checkout() {
         const pc = PANELS.find((p) => p.key === project.panel_key)?.count || 1;
         const q = await api.quote({
           material: project.material, size: project.size, panels: pc, frame: project.frame,
-          printful_variant_id: project.printful_variant_id,
+          printful_variant_id: project.printful_variant_id || undefined,
+          store_variant_id: project.store_variant_id,
           fallback_price: project.price,
           recipient: { name: "", address1: "", city: "", state_code: "", country_code: "US", zip: "" },
         });
@@ -67,7 +69,7 @@ export default function Checkout() {
   });
 
   const startPayment = async () => {
-    if (!project.printful_variant_id) { setError("Return to product selection and choose an available Printful variant."); return; }
+    if (!project.store_variant_id && !project.printful_variant_id && !(project.price > 0)) { setError("Return to the Store and choose a frame first."); return; }
     for (const f of FIELDS) if (!form[f.key]?.trim()) { setError(`Please fill in ${f.label.toLowerCase()}`); return; }
     setLoading(true); setError("");
     try {
@@ -75,19 +77,28 @@ export default function Checkout() {
       // Persist the project so the server can fulfil + reference the print image. The server
       // computes the amount and creates the Stripe PaymentIntent.
       const saved = await api.saveProject({
-        original: project.original, current: project.current, style: project.style,
+        original: project.original, current: project.current,
         room: project.room, room_preview: project.room_preview, material: project.material,
         size: project.size, frame: project.frame, panel_key: project.panel_key, panels: panelCount,
+        price: project.price,
+        store_variant_id: project.store_variant_id,
+        store_family_id: project.store_family_id,
+        store_family_name: project.store_family_name,
+        store_tier: project.store_tier,
+        store_image: project.store_image,
+        has_mat: project.has_mat,
         printful_variant_id: project.printful_variant_id,
         printful_product_id: project.printful_product_id,
-        printful_variant_name: project.printful_variant_name,
-        printful_variant_image: project.printful_variant_image,
-        printful_retail_price: project.printful_retail_price,
-        price: finalPrice,
+        printful_variant_name: project.store_family_name || project.printful_variant_name,
+        printful_variant_image: project.store_image || project.printful_variant_image,
+        printful_retail_price: project.price,
       });
       const res = await api.createPaymentIntent({
         project_id: saved.id, material: project.material, size: project.size,
-        frame: project.frame, printful_variant_id: project.printful_variant_id,
+        frame: project.frame,
+        printful_variant_id: project.printful_variant_id || 0,
+        store_variant_id: project.store_variant_id,
+        fallback_price: project.price,
         panel_key: project.panel_key, panels: panelCount,
         recipient: buildRecipient(),
       });
@@ -144,8 +155,8 @@ export default function Checkout() {
             <Image source={{ uri: heroImg }} style={styles.thumb} contentFit="cover" />
             <View style={{ flex: 1 }}>
               <Text style={styles.summaryTitle}>{materialLabel} · {sizeLabel}</Text>
-              <Text style={styles.summaryMeta}>{panelCount > 1 ? `${panelCount}-panel · ` : ""}{project.printful_variant_name}</Text>
-              <Text style={styles.variantMeta}>Printful variant #{project.printful_variant_id}</Text>
+              <Text style={styles.summaryMeta}>{panelCount > 1 ? `${panelCount}-panel · ` : ""}{project.store_family_name || project.printful_variant_name || "Gallery frame"}</Text>
+              <Text style={styles.variantMeta}>{project.store_tier ? String(project.store_tier).toUpperCase() : "FRAME WORKS"} · {project.size}</Text>
             </View>
             <View style={{ alignItems: "flex-end" }}>
               {hasDiscount && <Text style={styles.strikePrice}>${quote.retail_before_discount.toFixed(2)}</Text>}
@@ -155,9 +166,7 @@ export default function Checkout() {
 
           {quote && (
             <Text style={styles.quoteNote} testID="quote-note">
-              {quote.source === "printful"
-                ? `Live pricing · art $${quote.product.toFixed(2)} + shipping $${quote.shipping.toFixed(2)}`
-                : `Includes $${quote.shipping.toFixed(2)} shipping`}
+              {`Includes $${(quote.shipping ?? 0).toFixed(2)} shipping · gallery pricing`}
             </Text>
           )}
 

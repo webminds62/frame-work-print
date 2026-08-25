@@ -5,11 +5,10 @@ Covers:
   SEC-002 Payments: POST /api/orders removed; /api/payments/create-intent computes price
           server-side + ownership; /api/payments/complete/{id} ownership -> 404.
   SEC-003 Webhook: POST /api/webhooks/printful requires ?token=; without it, no change.
-  SEC-004 Rate limit: POST /api/auth/login rapid-fire returns 429; /api/transform still 200.
+  SEC-004 Rate limit: POST /api/auth/login rapid-fire returns 429.
   REGRESSION: /api/quote first-order discount fields; auth flows; projects CRUD; /orders list.
 """
 
-import base64
 import os
 import time
 import uuid
@@ -36,7 +35,6 @@ TINY_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII="
 )
 TINY_PNG = f"data:image/png;base64,{TINY_PNG_B64}"
-SAMPLE_IMAGE_URL = "https://images.unsplash.com/photo-1543466835-00a7907e9de1?w=600"
 
 RECIPIENT = {
     "name": "Sec Buyer", "address1": "1 Main", "city": "Austin",
@@ -77,13 +75,6 @@ def admin_headers(sess):
     assert r.status_code == 200, f"Admin login failed: {r.status_code} {r.text}"
     assert r.json()["user"]["is_admin"] is True
     return {"Authorization": f"Bearer {r.json()['token']}", "Content-Type": "application/json"}
-
-
-@pytest.fixture(scope="session")
-def real_image_b64():
-    r = requests.get(SAMPLE_IMAGE_URL, timeout=30)
-    r.raise_for_status()
-    return "data:image/jpeg;base64," + base64.b64encode(r.content).decode()
 
 
 # ================================================================
@@ -258,19 +249,6 @@ class TestSEC004_RateLimiting:
                 got_429 = True
                 break
         assert got_429, f"Expected 429 within 15 attempts, got codes {codes}"
-
-    def test_transform_still_works_single_call(self, sess, demo_headers, real_image_b64):
-        # We don't try to exhaust the 20/min AI limit — just confirm 1 call still succeeds.
-        payload = {"image_base64": real_image_b64, "style": "canvas",
-                   "enhance": True, "remove_bg": False}
-        r = sess.post(f"{API}/transform", headers=demo_headers, json=payload, timeout=90)
-        assert r.status_code in (200, 502), r.text
-        if r.status_code == 200:
-            assert r.json()["image_base64"].startswith("data:image")
-            assert len(r.json()["image_base64"]) > 1000
-        else:
-            pytest.skip(f"AI provider 502: {r.text[:120]}")
-
 
 # ================================================================
 # REGRESSION — /quote, projects CRUD, orders list, auth

@@ -26,9 +26,7 @@ from PIL import Image as PILImage
 from pymongo import ReturnDocument
 
 from ai_features import (
-    analyze_print_quality,
     demo_room_preview,
-    demo_transform,
     generation_cache_key,
 )
 from printful_catalog import (
@@ -39,6 +37,12 @@ from printful_catalog import (
     serialize_variants,
     snapshot_variants,
 )
+
+from pathlib import Path as _PathForDotenv
+from dotenv import load_dotenv as _load_dotenv_early
+_load_dotenv_early(_PathForDotenv(__file__).resolve().parent / ".env")
+import prodigi_client
+from prodigi_catalog import resolve_prodigi
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -77,6 +81,14 @@ EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Frame Works Prints")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 PRINTFUL_WEBHOOK_SECRET = os.environ.get("PRINTFUL_WEBHOOK_SECRET", "")
+
+# Prodigi Print API (preferred fulfillment)
+PRODIGI_API_KEY = os.environ.get("PRODIGI_API_KEY", "").strip()
+PRODIGI_BASE_URL = os.environ.get("PRODIGI_BASE_URL", "https://api.sandbox.prodigi.com").rstrip("/")
+PRODIGI_MARKUP = float(os.environ.get("PRODIGI_MARKUP", os.environ.get("PRINTFUL_MARKUP", "1.6")))
+PRODIGI_DEFAULT_SHIPPING = os.environ.get("PRODIGI_DEFAULT_SHIPPING", "Budget")
+PRODIGI_SUBMIT_ORDERS = os.environ.get("PRODIGI_SUBMIT_ORDERS", "false").strip().lower() in {"1", "true", "yes", "on"}
+
 
 # Sign in with Apple
 APPLE_AUDIENCES = [a.strip() for a in os.environ.get("APPLE_AUDIENCES", "").split(",") if a.strip()]
@@ -226,13 +238,6 @@ class AppleSignInIn(BaseModel):
     email: Optional[str] = None
 
 
-class TransformIn(BaseModel):
-    image_base64: str
-    style: str
-    enhance: bool = True
-    remove_bg: bool = False
-
-
 class RoomPreviewIn(BaseModel):
     image_base64: str
     room: str
@@ -241,14 +246,9 @@ class RoomPreviewIn(BaseModel):
     panels: int = 1
 
 
-class PrintQualityIn(BaseModel):
-    image_base64: str
-
-
 class ProjectIn(BaseModel):
     original: str
     current: str
-    style: str
     room: Optional[str] = None
     room_preview: Optional[str] = None
     material: Optional[str] = None
@@ -257,6 +257,12 @@ class ProjectIn(BaseModel):
     panels: Optional[int] = 1
     panel_key: Optional[str] = None
     price: Optional[float] = None
+    store_variant_id: Optional[str] = None
+    store_family_id: Optional[str] = None
+    store_family_name: Optional[str] = None
+    store_tier: Optional[str] = None
+    store_image: Optional[str] = None
+    has_mat: Optional[bool] = None
     printful_variant_id: Optional[int] = None
     printful_product_id: Optional[int] = None
     printful_variant_name: Optional[str] = None
@@ -345,17 +351,6 @@ async def require_admin(user=Depends(get_current_user)):
 
 def user_out(u: dict) -> UserOut:
     return UserOut(id=u["id"], email=u["email"], name=u.get("name"), is_admin=bool(u.get("is_admin")))
-
-
-STYLE_PROMPTS = {
-    "canvas": "Reproduce this photo as a premium hand-painted canvas print with subtle brush texture, gallery quality.",
-    "watercolor": "Transform this photo into an elegant watercolor painting with soft washes and artistic edges.",
-    "bw": "Convert this photo into high-contrast black-and-white fine art photography with rich tonal range, gallery print quality.",
-    "abstract": "Reinterpret this photo as a modern abstract art piece with bold shapes and a refined color palette while keeping the subject recognizable.",
-    "minimal": "Transform this photo into a minimalist fine-art poster interpretation with clean lines and generous negative space.",
-    "luxury": "Render this photo as a luxury framed art rendition with rich, opulent, refined color grading suitable for a high-end home.",
-    "gallery": "Enhance this photo into a museum gallery-style fine art print with refined, balanced composition and premium color.",
-}
 
 
 def _sync_image_edit(image_bytes: bytes, prompt: str) -> str:
@@ -533,68 +528,6 @@ async def delete_account(user=Depends(get_current_user)):
 
 
 # ---------- AI ----------
-@api_router.post("/transform")
-async def transform(data: TransformIn, user=Depends(get_current_user)):
-    rate_limit(f"ai:{user['id']}", 20, 60)
-    options = {"style": data.style, "enhance": data.enhance, "remove_bg": data.remove_bg}
-    cache_key = generation_cache_key("transform", data.image_base64, options)
-    if AI_DEMO_MODE:
-        try:
-            result, notices = await asyncio.to_thread(
-                demo_transform, data.image_base64, data.style, data.enhance, data.remove_bg
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {
-            "image_base64": result,
-            "mode": "demo",
-            "cached": False,
-            "remaining_today": AI_DAILY_CLOUD_LIMIT,
-            "notices": notices,
-        }
-
-    cached = await get_cached_generation(cache_key)
-    if cached:
-        return {
-            "image_base64": cached["image_base64"],
-            "mode": "cloud",
-            "cached": True,
-            "remaining_today": None,
-            "notices": ["Reused a cached preview; no new AI generation was billed."],
-        }
-    if not IMAGE_API_KEY:
-        raise HTTPException(status_code=503, detail="Cloud AI is disabled because OPENAI_API_KEY is not configured.")
-    remaining = await consume_cloud_generation(user["id"])
-    base = STYLE_PROMPTS.get(data.style, STYLE_PROMPTS["gallery"])
-    parts = []
-    if data.enhance:
-        parts.append("First, enhance lighting, sharpness, color balance and composition.")
-    parts.append(base)
-    if data.remove_bg:
-        parts.append("Replace the background with a clean, neutral studio backdrop suitable for wall art.")
-    parts.append("Output a high-resolution, print-ready artwork. Keep the main subject clearly recognizable.")
-    prompt = " ".join(parts)
-    result = await gemini_edit(data.image_base64, prompt)
-    await cache_generation(cache_key, result)
-    return {
-        "image_base64": result,
-        "mode": "cloud",
-        "cached": False,
-        "remaining_today": remaining,
-        "notices": [f"Cloud preview generated at {IMAGE_QUALITY} quality."],
-    }
-
-
-@api_router.post("/print-quality")
-async def print_quality(data: PrintQualityIn, user=Depends(get_current_user)):
-    rate_limit(f"quality:{user['id']}", 30, 60)
-    try:
-        result = await asyncio.to_thread(analyze_print_quality, data.image_base64)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return result
-
-
 # Per-material frame descriptions for the room-preview prompt. These labels match
 # the exact finish keys returned by the verified Printful catalog boundary.
 def frame_description(material: str, frame: str) -> str:
@@ -602,14 +535,15 @@ def frame_description(material: str, frame: str) -> str:
         if material == "canvas":
             return "a frameless gallery-wrapped canvas, with the image continuing around the 1.25-inch wrapped edges"
         return "an unframed, flat printed poster with no border"
-    if frame in {"wood", "brown", "red_oak"}:
-        wood_desc = "a dark brown pine" if material == "canvas" else "a light red oak wood"
-        return f"{wood_desc} frame"
-    if frame == "black":
-        return "a matte black wood frame"
+    if frame in {"wood", "brown", "red_oak", "oak", "oak_deep", "oak_float", "natural"}:
+        return "a natural oak wood gallery frame with an ivory museum mat"
+    if frame == "walnut":
+        return "a deep walnut wood gallery frame with an ivory museum mat"
+    if frame in {"black", "black_deep", "black_float"}:
+        return "a matte black wood gallery frame with an ivory museum mat"
     if frame == "white":
-        return "a clean white wood frame"
-    return f"a {frame} frame"
+        return "a clean white wood gallery frame with an ivory museum mat"
+    return f"a {frame} gallery frame"
 
 
 @api_router.post("/room-preview")
@@ -708,28 +642,6 @@ async def delete_project(project_id: str, user=Depends(get_current_user)):
     return {"ok": True}
 
 
-@api_router.get("/printful/catalog")
-async def printful_catalog(user=Depends(get_current_user)):
-    """Approved wall-art variants from Printful's public Catalog API.
-
-    Public catalog synchronization needs no account token. `orders_configured`
-    only reports readiness; credentials are never returned to the client.
-    """
-    variants, source, synced_at = await get_catalog(PRINTFUL_MARKUP)
-    return {
-        "variants": serialize_variants(variants),
-        "source": source,
-        "synced_at": synced_at,
-        "orders_configured": bool(PRINTFUL_TOKEN),
-        "store_context_configured": bool(PRINTFUL_STORE_ID),
-        "markup": PRINTFUL_MARKUP,
-        "note": (
-            "Live public Printful catalog; shipping is calculated at checkout."
-            if source == "printful_live"
-            else "Verified offline Printful catalog snapshot; refresh before enabling live sales."
-        ),
-    }
-
 
 class QuoteIn(BaseModel):
     material: str
@@ -737,7 +649,9 @@ class QuoteIn(BaseModel):
     panels: int = 1
     frame: Optional[str] = "none"
     printful_variant_id: Optional[int] = None
-    fallback_price: Optional[float] = None  # deprecated/ignored; price is computed server-side
+    store_variant_id: Optional[str] = None
+    # Gallery store retail when no Printful/Prodigi live quote is used.
+    fallback_price: Optional[float] = None
     recipient: Recipient
 
 
@@ -749,22 +663,58 @@ async def compute_quote(
     panels: int,
     recipient: dict,
     printful_variant_id: Optional[int] = None,
+    store_variant_id: Optional[str] = None,
+    fallback_price: Optional[float] = None,
 ) -> dict:
-    """Server-authoritative price for one exact Printful catalog variant."""
+    """Server-authoritative price. Prefers gallery/store price; Printful path optional."""
     frame = frame or "none"
-    variant_id = printful_variant_id
-    if variant_id is None:
-        # Backward-compatible path for older saved projects; it resolves an exact
-        # tuple and never substitutes a different product or finish.
-        variant_id, _ = resolve_printful_variant(material, size, frame)
-    if variant_id is None:
-        raise HTTPException(status_code=422, detail="Choose an available Printful product, size, and finish before checkout.")
-    variant = await validated_printful_variant(variant_id, material, size, frame)
     n = max(1, panels or 1)
-    base_price = round(variant.retail_price * n, 2)
     prior = await db.orders.count_documents({"user_id": user_id, "material": {"$exists": True}})
     first_order = prior == 0
     disc_pct = FIRST_ORDER_DISCOUNT if first_order else 0.0
+
+    def finalize_gallery(retail, product, shipping, source="gallery", currency="USD", **extra):
+        retail = round(float(retail), 2)
+        discount_amount = round(retail * disc_pct, 2)
+        out = {
+            "retail": round(retail - discount_amount, 2),
+            "retail_before_discount": retail,
+            "first_order": first_order,
+            "discount_pct": disc_pct,
+            "discount_amount": discount_amount,
+            "product": round(float(product), 2),
+            "shipping": round(float(shipping), 2),
+            "base_cost": None,
+            "source": source,
+            "currency": currency,
+            "store_variant_id": store_variant_id,
+            "finish_label": frame,
+        }
+        out.update(extra)
+        return out
+
+    # Curated Frame Works gallery path (no Printful catalog required).
+    if store_variant_id or (fallback_price is not None and printful_variant_id in (None, 0)):
+        if fallback_price is None or float(fallback_price) <= 0:
+            raise HTTPException(status_code=422, detail="Choose a frame in the Store before checkout.")
+        product = round(float(fallback_price), 2)
+        shipping = INHOUSE_SHIPPING
+        return finalize_gallery(product + shipping, product, shipping)
+
+    variant_id = printful_variant_id if printful_variant_id not in (None, 0) else None
+    if variant_id is None:
+        try:
+            variant_id, _ = resolve_printful_variant(material, size, frame)
+        except Exception:
+            variant_id = None
+    if variant_id is None:
+        if fallback_price is not None and float(fallback_price) > 0:
+            product = round(float(fallback_price), 2)
+            return finalize_gallery(product + INHOUSE_SHIPPING, product, INHOUSE_SHIPPING)
+        raise HTTPException(status_code=422, detail="Choose a frame in the Store before checkout.")
+
+    variant = await validated_printful_variant(variant_id, material, size, frame)
+    base_price = round(variant.retail_price * n, 2)
 
     def finalize(retail, product, shipping, base_cost, source, currency="USD"):
         retail = round(retail, 2)
@@ -775,8 +725,11 @@ async def compute_quote(
             "first_order": first_order,
             "discount_pct": disc_pct,
             "discount_amount": discount_amount,
-            "product": round(product, 2), "shipping": round(shipping, 2),
-            "base_cost": base_cost, "source": source, "currency": currency,
+            "product": round(product, 2),
+            "shipping": round(shipping, 2),
+            "base_cost": base_cost,
+            "source": source,
+            "currency": currency,
             "printful_variant_id": variant.id,
             "printful_product_id": variant.product_id,
             "printful_variant_name": variant.name,
@@ -791,11 +744,17 @@ async def compute_quote(
         headers["X-PF-Store-Id"] = PRINTFUL_STORE_ID
     payload = {
         "recipient": {
-            "address1": recipient.get("address1", ""), "city": recipient.get("city", ""),
-            "state_code": recipient.get("state_code"), "country_code": recipient.get("country_code", "US"),
+            "address1": recipient.get("address1", ""),
+            "city": recipient.get("city", ""),
+            "state_code": recipient.get("state_code"),
+            "country_code": recipient.get("country_code", "US"),
             "zip": recipient.get("zip", ""),
         },
-        "items": [{"variant_id": variant.id, "quantity": n, "files": [{"url": f"{PUBLIC_BASE_URL}/api/public/project/placeholder"}]}],
+        "items": [{
+            "variant_id": variant.id,
+            "quantity": n,
+            "files": [{"url": f"{PUBLIC_BASE_URL}/api/public/project/placeholder"}],
+        }],
     }
     try:
         async with httpx.AsyncClient(base_url="https://api.printful.com", headers=headers, timeout=45) as c:
@@ -808,8 +767,14 @@ async def compute_quote(
             shipping = float(costs.get("shipping") or 0)
             if base_cost <= 0:
                 raise Exception("no cost")
-            return finalize(base_cost * PRINTFUL_MARKUP, (base_cost - shipping) * PRINTFUL_MARKUP,
-                            shipping * PRINTFUL_MARKUP, round(base_cost, 2), "printful", costs.get("currency", "USD"))
+            return finalize(
+                base_cost * PRINTFUL_MARKUP,
+                (base_cost - shipping) * PRINTFUL_MARKUP,
+                shipping * PRINTFUL_MARKUP,
+                round(base_cost, 2),
+                "printful",
+                costs.get("currency", "USD"),
+            )
     except Exception as e:
         logger.error(f"quote fallback: {e}")
         return finalize(base_price + INHOUSE_SHIPPING, base_price, INHOUSE_SHIPPING, None, "fallback")
@@ -817,8 +782,258 @@ async def compute_quote(
 
 @api_router.post("/quote")
 async def quote(data: QuoteIn, user=Depends(get_current_user)):
-    return await compute_quote(user["id"], data.material, data.size, data.frame or "none",
-                               data.panels, data.recipient.model_dump(), data.printful_variant_id)
+    return await compute_quote(
+        user["id"], data.material, data.size, data.frame or "none",
+        data.panels, data.recipient.model_dump(), data.printful_variant_id,
+        store_variant_id=data.store_variant_id, fallback_price=data.fallback_price,
+    )
+
+
+
+
+# ---------- Prodigi fulfillment ----------
+@api_router.get("/prodigi/status")
+async def prodigi_status():
+    """Whether Prodigi is configured (never returns the API key). Public for setup checks."""
+    return {
+        "configured": prodigi_client.configured(),
+        "base_url": prodigi_client.PRODIGI_BASE_URL,
+        "submit_orders": prodigi_client.PRODIGI_SUBMIT_ORDERS,
+        "default_shipping": prodigi_client.PRODIGI_DEFAULT_SHIPPING,
+        "markup": prodigi_client.PRODIGI_MARKUP,
+        "public_base_url_set": bool(PUBLIC_BASE_URL and PUBLIC_BASE_URL.startswith("http")),
+        "public_base_url_https": bool(PUBLIC_BASE_URL and PUBLIC_BASE_URL.startswith("https://")),
+        "ready_to_quote": prodigi_client.configured(),
+        "ready_to_submit_orders": bool(
+            prodigi_client.configured()
+            and prodigi_client.PRODIGI_SUBMIT_ORDERS
+            and PUBLIC_BASE_URL
+            and PUBLIC_BASE_URL.startswith("https://")
+        ),
+        "hint": (
+            None
+            if prodigi_client.configured()
+            else "Set PRODIGI_API_KEY in backend/.env (sandbox key from https://www.prodigi.com/), then restart the API."
+        ),
+    }
+
+
+@api_router.get("/catalog/store")
+async def store_catalog():
+    """Full curated Frame Works gallery catalog (Essential / Gallery / Atelier).
+
+    This is the source of truth for the Store UI — not Printful.
+    Includes families, sizes, variants, prices, and Prodigi mapping hints.
+    Public so the Store can load before/without blocking on edge auth issues.
+    """
+    from prodigi_catalog import FAMILY_FULFILLMENT, resolve_prodigi
+
+    catalog_path = ROOT_DIR / "catalog" / "store_catalog.json"
+    if not catalog_path.exists():
+        raise HTTPException(status_code=503, detail="Store catalog is not available on the server.")
+    try:
+        payload = json.loads(catalog_path.read_text())
+    except Exception as exc:
+        logger.error("Failed to read store catalog: %s", exc)
+        raise HTTPException(status_code=503, detail="Store catalog could not be loaded.") from exc
+
+    # Attach Prodigi fulfillment hints per family (no secrets)
+    fulfillment_by_family = {}
+    for fid, spec in FAMILY_FULFILLMENT.items():
+        fulfillment_by_family[fid] = {
+            "kind": spec.get("kind"),
+            "sku_template": spec.get("sku_template"),
+            "attributes": spec.get("attributes") or {},
+        }
+
+    # Annotate variants with prodigi sku when mappable
+    variants = []
+    for v in payload.get("variants") or []:
+        mapped = resolve_prodigi(v.get("id"), size_key=v.get("size_key") or "", family_id=v.get("family_id") or "")
+        item = dict(v)
+        if mapped:
+            item["prodigi_sku"] = mapped.get("sku")
+            item["prodigi_attributes"] = mapped.get("attributes") or {}
+        variants.append(item)
+
+    return {
+        "version": payload.get("version", 1),
+        "source": payload.get("source", "frame_works_gallery"),
+        "fulfillment": "prodigi" if prodigi_client.configured() else "gallery_manual",
+        "prodigi_configured": prodigi_client.configured(),
+        "tier_meta": payload.get("tier_meta") or {},
+        "sizes": payload.get("sizes") or [],
+        "families": payload.get("families") or [],
+        "variants": variants,
+        "variant_count": len(variants),
+        "family_count": len(payload.get("families") or []),
+        "fulfillment_by_family": fulfillment_by_family,
+        "note": "Curated gallery catalog from the API. Room preview uses each variant frame_key.",
+    }
+
+
+@api_router.post("/prodigi/quote")
+async def prodigi_quote_endpoint(data: QuoteIn, user=Depends(get_current_user)):
+    """Live Prodigi cost for a store_variant_id (falls back to gallery price)."""
+    mapping = resolve_prodigi(data.store_variant_id, size_key=data.size or "")
+    if not mapping:
+        raise HTTPException(status_code=422, detail="No Prodigi mapping for this store frame yet.")
+    if not prodigi_client.configured():
+        # offline / no key — return gallery fallback
+        product = float(data.fallback_price or 0)
+        if product <= 0:
+            raise HTTPException(status_code=503, detail="Prodigi is not configured and no fallback price was provided.")
+        shipping = INHOUSE_SHIPPING
+        retail = round((product + shipping), 2)
+        return {
+            "source": "gallery_fallback",
+            "prodigi_sku": mapping["sku"],
+            "attributes": mapping["attributes"],
+            "product": product,
+            "shipping": shipping,
+            "retail": retail,
+            "currency": "USD",
+        }
+    try:
+        raw = await prodigi_client.create_quote(
+            sku=mapping["sku"],
+            copies=max(1, data.panels or 1),
+            attributes=mapping["attributes"] or None,
+            destination_country_code=(data.recipient.country_code if data.recipient else "US") or "US",
+        )
+        totals = prodigi_client.parse_quote_totals(raw)
+        product = round(totals["product"] * prodigi_client.PRODIGI_MARKUP, 2)
+        shipping = round(totals["shipping"] * prodigi_client.PRODIGI_MARKUP, 2)
+        if product <= 0 and data.fallback_price:
+            product = float(data.fallback_price)
+            shipping = INHOUSE_SHIPPING
+        return {
+            "source": "prodigi",
+            "prodigi_sku": mapping["sku"],
+            "attributes": mapping["attributes"],
+            "product": product,
+            "shipping": shipping,
+            "retail": round(product + shipping, 2),
+            "currency": totals.get("currency") or "USD",
+            "base_cost": totals.get("total"),
+        }
+    except Exception as e:
+        logger.error("prodigi quote failed: %s", e)
+        if data.fallback_price:
+            product = float(data.fallback_price)
+            return {
+                "source": "gallery_fallback",
+                "prodigi_sku": mapping["sku"],
+                "attributes": mapping["attributes"],
+                "product": product,
+                "shipping": INHOUSE_SHIPPING,
+                "retail": round(product + INHOUSE_SHIPPING, 2),
+                "currency": "USD",
+                "error": str(e)[:200],
+            }
+        raise HTTPException(status_code=502, detail="Prodigi quote unavailable")
+
+
+@api_router.post("/webhooks/prodigi")
+async def prodigi_webhook(request: Request):
+    """Prodigi order status callback. Treat as untrusted; re-fetch order when possible."""
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    data = payload.get("data") or payload
+    order_obj = (data.get("order") if isinstance(data, dict) else None) or data
+    prodigi_id = None
+    if isinstance(order_obj, dict):
+        prodigi_id = order_obj.get("id")
+    merchant_ref = None
+    if isinstance(order_obj, dict):
+        merchant_ref = order_obj.get("merchantReference")
+    stage = None
+    if isinstance(order_obj, dict):
+        stage = (order_obj.get("status") or {}).get("stage")
+
+    # Prefer authenticated GET when configured
+    if prodigi_id and prodigi_client.configured():
+        try:
+            fresh = await prodigi_client.get_order(prodigi_id)
+            fo = fresh.get("order") or fresh
+            stage = (fo.get("status") or {}).get("stage") or stage
+            merchant_ref = fo.get("merchantReference") or merchant_ref
+            shipments = fo.get("shipments") or []
+            tracking_url = ""
+            if shipments:
+                tracking_url = (shipments[0] or {}).get("trackingUrl") or (shipments[0] or {}).get("tracking_url") or ""
+        except Exception as e:
+            logger.error("prodigi webhook re-fetch failed: %s", e)
+            tracking_url = ""
+    else:
+        tracking_url = ""
+
+    status_map = {
+        "InProgress": "in_production",
+        "Complete": "shipped",
+        "Cancelled": "cancelled",
+    }
+    local_status = status_map.get(stage or "", None)
+
+    q = {}
+    if merchant_ref:
+        q["id"] = merchant_ref
+    if prodigi_id:
+        q = {"$or": [{"id": merchant_ref} if merchant_ref else {"_id": None}, {"prodigi_order_id": prodigi_id}]}
+        # clean null
+        q["$or"] = [x for x in q["$or"] if x and list(x.values())[0]]
+
+    if q:
+        update = {"prodigi_stage": stage, "prodigi_order_id": prodigi_id}
+        if local_status:
+            update["status"] = local_status
+        if tracking_url:
+            update["tracking_url"] = tracking_url
+        await db.orders.update_one(q if "$or" not in q else q, {"$set": update})
+        if merchant_ref:
+            await db.orders.update_one({"id": merchant_ref}, {"$set": update})
+
+    return {"received": True, "stage": stage}
+
+
+async def submit_prodigi_order(order_id: str, project_id: str, cart: dict, user: dict) -> tuple[str, str, Optional[str]]:
+    """Submit to Prodigi when enabled. Returns (status, prodigi_status, prodigi_order_id)."""
+    if not prodigi_client.configured():
+        return "received", "prodigi_not_configured", None
+    if not prodigi_client.PRODIGI_SUBMIT_ORDERS:
+        return "received", "prodigi_submit_disabled", None
+    if not PUBLIC_BASE_URL:
+        logger.error("PUBLIC_BASE_URL required for Prodigi asset download")
+        return "received", "prodigi_missing_public_url", None
+
+    store_variant_id = cart.get("store_variant_id")
+    mapping = resolve_prodigi(store_variant_id, size_key=cart.get("size") or "", family_id=cart.get("store_family_id") or "")
+    if not mapping:
+        return "received", "prodigi_unmapped_sku", None
+
+    asset_url = f"{PUBLIC_BASE_URL}/api/public/project/{project_id}"
+    recipient = prodigi_client.recipient_from_app(cart.get("recipient") or {}, email=user.get("email") or "")
+    callback = f"{PUBLIC_BASE_URL}/api/webhooks/prodigi" if PUBLIC_BASE_URL.startswith("https") else None
+    try:
+        result = await prodigi_client.create_order(
+            merchant_reference=order_id,
+            recipient=recipient,
+            sku=mapping["sku"],
+            asset_url=asset_url,
+            copies=max(1, int(cart.get("panels") or 1)),
+            attributes=mapping["attributes"] or None,
+            callback_url=callback,
+            idempotency_key=order_id,
+        )
+        order_obj = result.get("order") or result
+        pid = order_obj.get("id")
+        stage = (order_obj.get("status") or {}).get("stage") or "InProgress"
+        return "in_production", f"prodigi:{stage}", pid
+    except Exception as e:
+        logger.error("Prodigi create_order failed: %s", e)
+        return "received", "prodigi_submit_failed", None
 
 
 class MockupIn(BaseModel):
@@ -926,7 +1141,6 @@ async def send_order_email(to_email: str, order: dict):
     material = (order.get("material") or "").replace("_", " ").title()
     size = order.get("size") or ""
     frame = (order.get("frame") or "").replace("_", " ").title()
-    style = (order.get("style") or "").replace("_", " ").title()
     panels = order.get("panels") or 1
     price = float(order.get("price") or 0)
     oid = str(order.get("id", ""))[:8].upper()
@@ -949,7 +1163,7 @@ async def send_order_email(to_email: str, order: dict):
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif;font-size:14px;color:#1c1b1a;border:1px solid #e6ddd0;border-radius:10px;">
             <tr><td style="padding:14px 16px;color:#6b6459;">Order</td><td style="padding:14px 16px;text-align:right;font-weight:bold;">#{oid}</td></tr>
             <tr><td style="padding:14px 16px;color:#6b6459;border-top:1px solid #f0e9de;">Artwork</td><td style="padding:14px 16px;text-align:right;border-top:1px solid #f0e9de;">{panel_line}{material} · {size}</td></tr>
-            <tr><td style="padding:14px 16px;color:#6b6459;border-top:1px solid #f0e9de;">Frame &amp; style</td><td style="padding:14px 16px;text-align:right;border-top:1px solid #f0e9de;">{frame} · {style}</td></tr>
+            <tr><td style="padding:14px 16px;color:#6b6459;border-top:1px solid #f0e9de;">Frame</td><td style="padding:14px 16px;text-align:right;border-top:1px solid #f0e9de;">{frame}</td></tr>
             <tr><td style="padding:14px 16px;color:#6b6459;border-top:1px solid #f0e9de;font-size:16px;">Total paid</td><td style="padding:14px 16px;text-align:right;border-top:1px solid #f0e9de;font-size:16px;font-weight:bold;">${price:.2f}</td></tr>
           </table>
         </td></tr>
@@ -1020,13 +1234,52 @@ async def create_order_internal(user: dict, cart: dict, price: float, stripe_pay
     directly by the client, so orders cannot be placed without payment."""
     project = await db.projects.find_one({"id": cart.get("project_id"), "user_id": user["id"]}) or {}
     order_id = str(uuid.uuid4())
-    status, printful_status, printful_order_id = await submit_printful_order(
-        order_id, cart.get("project_id"), cart["material"], cart["size"], cart.get("panels") or 1,
-        cart.get("frame") or "none", cart["printful_variant_id"], cart["recipient"],
+    pf_variant_id = cart.get("printful_variant_id")
+    store_variant_id = cart.get("store_variant_id") or project.get("store_variant_id")
+    use_gallery = bool(store_variant_id) or pf_variant_id in (None, 0, "")
+
+    status = "received"
+    printful_status = "not_fulfilled_by_printful"
+    printful_order_id = None
+    variant = None
+    finish_label = cart.get("frame") or project.get("frame") or "none"
+
+    if not use_gallery and pf_variant_id:
+        try:
+            status, printful_status, printful_order_id = await submit_printful_order(
+                order_id, cart.get("project_id"), cart["material"], cart["size"], cart.get("panels") or 1,
+                cart.get("frame") or "none", pf_variant_id, cart["recipient"],
+            )
+            variant = await validated_printful_variant(
+                pf_variant_id, cart["material"], cart["size"], cart.get("frame") or "none"
+            )
+            finish_label = getattr(variant, "finish_label", finish_label)
+        except Exception as exc:
+            logger.error("Printful submit skipped/failed for gallery-safe path: %s", exc)
+            status, printful_status, printful_order_id = "received", "not_fulfilled_by_printful", None
+    else:
+        # Frame Works gallery order — Prodigi when configured+enabled, else manual.
+        status, printful_status, printful_order_id = await submit_prodigi_order(
+            order_id, cart.get("project_id") or "", cart, user
+        )
+        if printful_status == "gallery_manual" or printful_status.startswith("prodigi_"):
+            # keep status received unless submit started production
+            pass
+
+    frame_name = (
+        (getattr(variant, "name", None) if variant else None)
+        or project.get("store_family_name")
+        or cart.get("printful_variant_name")
+        or project.get("printful_variant_name")
+        or "Gallery frame"
     )
-    variant = await validated_printful_variant(
-        cart["printful_variant_id"], cart["material"], cart["size"], cart.get("frame") or "none"
+    frame_image = (
+        (getattr(variant, "image", None) if variant else None)
+        or project.get("store_image")
+        or cart.get("printful_variant_image")
+        or project.get("printful_variant_image")
     )
+
     doc = {
         "id": order_id,
         "user_id": user["id"],
@@ -1034,20 +1287,25 @@ async def create_order_internal(user: dict, cart: dict, price: float, stripe_pay
         "status": status,
         "printful_status": printful_status,
         "printful_order_id": printful_order_id,
+        "prodigi_order_id": printful_order_id if (printful_status or "").startswith("prodigi") or (printful_order_id and str(printful_order_id).startswith("ord_")) else None,
+        "prodigi_sku": (resolve_prodigi(store_variant_id, size_key=cart.get("size") or "") or {}).get("sku"),
         "stripe_payment_intent_id": stripe_payment_intent_id,
         "project_id": cart.get("project_id"),
         "image_base64": project.get("current"),
         "room_preview": project.get("room_preview"),
-        "style": project.get("style") or cart.get("style"),
-        "material": cart["material"],
-        "size": cart["size"],
-        "frame": cart.get("frame") or "none",
-        "printful_variant_id": variant.id,
-        "printful_product_id": variant.product_id,
-        "printful_variant_name": variant.name,
-        "printful_variant_image": variant.image,
-        "printful_finish_label": variant.finish_label,
-        "panel_key": cart.get("panel_key"),
+        "material": cart.get("material") or project.get("material"),
+        "size": cart.get("size") or project.get("size"),
+        "frame": cart.get("frame") or project.get("frame") or "none",
+        "printful_variant_id": getattr(variant, "id", None) if variant else None,
+        "printful_product_id": getattr(variant, "product_id", None) if variant else None,
+        "printful_variant_name": frame_name,
+        "printful_variant_image": frame_image,
+        "store_variant_id": store_variant_id,
+        "store_family_name": project.get("store_family_name") or cart.get("store_family_name"),
+        "store_tier": project.get("store_tier"),
+        "price_source": cart.get("price_source") or ("gallery" if use_gallery else "printful"),
+        "printful_finish_label": finish_label,
+        "panel_key": cart.get("panel_key") or project.get("panel_key"),
         "panels": cart.get("panels") or 1,
         "price": round(price, 2),
         "recipient": cart["recipient"],
@@ -1126,7 +1384,9 @@ class PaymentCreateIn(BaseModel):
     material: str
     size: str
     frame: str = "none"
-    printful_variant_id: int
+    printful_variant_id: Optional[int] = None
+    store_variant_id: Optional[str] = None
+    fallback_price: Optional[float] = None
     panel_key: Optional[str] = None
     panels: int = 1
     recipient: Recipient
@@ -1157,13 +1417,19 @@ async def create_payment(data: PaymentCreateIn, user=Depends(get_current_user)):
     project = await db.projects.find_one({"id": data.project_id, "user_id": user["id"]})
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    variant = await validated_printful_variant(data.printful_variant_id, data.material, data.size, data.frame)
-    saved_variant_id = project.get("printful_variant_id")
-    if saved_variant_id is not None and int(saved_variant_id) != variant.id:
-        raise HTTPException(status_code=409, detail="The checkout variant no longer matches the saved project selection.")
+    store_variant_id = data.store_variant_id or project.get("store_variant_id")
+    fallback_price = data.fallback_price if data.fallback_price is not None else project.get("price")
+    use_gallery = bool(store_variant_id) or (data.printful_variant_id in (None, 0) and fallback_price)
+    variant = None
+    if not use_gallery:
+        variant = await validated_printful_variant(data.printful_variant_id, data.material, data.size, data.frame)
+        saved_variant_id = project.get("printful_variant_id")
+        if saved_variant_id is not None and int(saved_variant_id) != variant.id:
+            raise HTTPException(status_code=409, detail="The checkout variant no longer matches the saved project selection.")
     q = await compute_quote(
         user["id"], data.material, data.size, data.frame, data.panels,
         data.recipient.model_dump(), data.printful_variant_id,
+        store_variant_id=store_variant_id, fallback_price=fallback_price,
     )
     amount = q["retail"]
     currency = q.get("currency", "USD")
@@ -1184,10 +1450,13 @@ async def create_payment(data: PaymentCreateIn, user=Depends(get_current_user)):
         "user_id": user["id"], "project_id": data.project_id,
         "amount": amount, "currency": currency, "status": "created",
         "material": data.material, "size": data.size, "frame": data.frame,
-        "printful_variant_id": variant.id,
-        "printful_product_id": variant.product_id,
-        "printful_variant_name": variant.name,
-        "printful_variant_image": variant.image,
+        "printful_variant_id": getattr(variant, "id", None) if variant else None,
+        "printful_product_id": getattr(variant, "product_id", None) if variant else None,
+        "printful_variant_name": (getattr(variant, "name", None) if variant else None) or project.get("store_family_name") or project.get("printful_variant_name"),
+        "printful_variant_image": (getattr(variant, "image", None) if variant else None) or project.get("store_image") or project.get("printful_variant_image"),
+        "store_variant_id": store_variant_id,
+        "store_family_name": project.get("store_family_name"),
+        "price_source": q.get("source"),
         "panel_key": data.panel_key, "panels": data.panels,
         "recipient": data.recipient.model_dump(),
         "created_at": datetime.now(timezone.utc).isoformat(),

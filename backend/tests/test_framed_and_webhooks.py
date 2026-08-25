@@ -5,7 +5,6 @@ Covers:
   - POST /api/orders with frame='wood' (real Printful draft) + confirmation email
   - POST /api/webhooks/printful package_shipped / order_canceled / unknown
   - Auth regression (register/login/me)
-  - /api/transform still works
   - Admin PATCH /api/admin/orders/{id} status change (attempts status email)
 """
 import base64
@@ -306,30 +305,6 @@ class TestAuthRegression:
                          json={"email": email, "password": "Password123", "name": "TmpUser"}, timeout=30)
         assert r.status_code == 200
         assert "token" in r.json()
-
-
-# ============ /api/transform regression ============
-class TestTransformRegression:
-    def test_transform_returns_image(self, session, demo_headers):
-        # small stock photo
-        img = Image.new("RGB", (256, 256), (30, 90, 160))
-        # add gradient so gpt-image doesn't reject blank
-        px = img.load()
-        for y in range(256):
-            for x in range(256):
-                px[x, y] = ((x + y) % 255, y % 255, x % 255)
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=88)
-        data_uri = f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
-        payload = {"image_base64": data_uri, "style": "gallery", "enhance": True, "remove_bg": False}
-        r = session.post(f"{API}/transform", headers=demo_headers, json=payload, timeout=180)
-        # accept 200 or occasional 502 proxy hiccup per iteration_6 note
-        assert r.status_code in (200, 502), r.text[:400]
-        if r.status_code == 200:
-            j = r.json()
-            assert "image_base64" in j and j["image_base64"].startswith("data:image/"), "expected data URI"
-            raw = j["image_base64"].split(",", 1)[1]
-            assert len(base64.b64decode(raw)) > 5000
 
 
 # ============ Admin PATCH order status ============

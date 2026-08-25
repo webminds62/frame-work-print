@@ -53,10 +53,32 @@ export default function Crop() {
     (async () => {
       if (!project) { setTimeout(() => router.replace("/(tabs)"), 0); return; }
       try {
-        const file = await toFileUri(project.current);
-        const info = await ImageManipulator.manipulateAsync(file, [], {});
-        setSrcUri(info.uri);
-        setDims({ w: info.width, h: info.height });
+        // On web, prefer using the data URI directly — manipulator is optional.
+        if (Platform.OS === "web") {
+          setSrcUri(project.current);
+          // Estimate dims via browser Image if available
+          if (typeof Image !== "undefined" && project.current.startsWith("data:")) {
+            await new Promise<void>((resolve) => {
+              const img = new (window as any).Image();
+              img.onload = () => {
+                setDims({ w: img.naturalWidth || 1024, h: img.naturalHeight || 1024 });
+                resolve();
+              };
+              img.onerror = () => {
+                setDims({ w: 1024, h: 1024 });
+                resolve();
+              };
+              img.src = project.current;
+            });
+          } else {
+            setDims({ w: 1024, h: 1024 });
+          }
+        } else {
+          const file = await toFileUri(project.current);
+          const info = await ImageManipulator.manipulateAsync(file, [], {});
+          setSrcUri(info.uri);
+          setDims({ w: info.width, h: info.height });
+        }
       } catch {
         setSrcUri(project.current);
         setDims({ w: 1024, h: 1024 });
@@ -158,16 +180,20 @@ export default function Crop() {
       );
       const dataUri = res.base64 ? `data:image/jpeg;base64,${res.base64}` : res.uri;
       updateProject({ current: dataUri });
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      router.push("/editor");
-    } catch {
-      router.push("/editor");
+      try { if (Platform.OS !== "web") await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
+      router.push("/room");
+    } catch (err) {
+      // Web / manipulator can fail on some data URIs — keep original photo and continue.
+      if (project?.current) updateProject({ current: project.current });
+      router.push("/room");
     } finally {
       setSaving(false);
     }
   };
 
-  const skip = () => router.push("/editor");
+  const skip = () => {
+    router.push("/room");
+  };
 
   return (
     <View style={styles.root}>

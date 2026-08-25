@@ -1,4 +1,4 @@
-"""Backend tests for FrameWorks Prints: auth, admin, projects, orders, AI transform + room-preview."""
+"""Backend tests for FrameWorks Prints: auth, admin, projects, orders, AI room-preview."""
 import os
 import uuid
 import base64
@@ -289,26 +289,9 @@ class TestAdmin:
 
 # ---------- AI (slow, real gpt-image-1 via Emergent proxy) ----------
 class TestAI:
-    def test_transform_requires_auth(self, sess):
-        r = sess.post(f"{API}/transform", json={"image_base64": TINY_PNG, "style": "canvas"}, timeout=15)
-        assert r.status_code in (401, 403)
-
     def test_room_preview_requires_auth(self, sess):
         r = sess.post(f"{API}/room-preview", json={"image_base64": TINY_PNG, "room": "living_room"}, timeout=15)
         assert r.status_code in (401, 403)
-
-    @pytest.mark.timeout(120)
-    def test_transform_generates_image(self, sess, demo_headers, real_image_b64):
-        payload = {"image_base64": real_image_b64, "style": "canvas", "enhance": True, "remove_bg": False}
-        r = sess.post(f"{API}/transform", headers=demo_headers, json=payload, timeout=120)
-        assert r.status_code in (200, 502), r.text
-        if r.status_code == 200:
-            data = r.json()
-            assert "image_base64" in data
-            assert data["image_base64"].startswith("data:image")
-            assert len(data["image_base64"]) > 1000
-        else:
-            pytest.skip(f"AI provider returned 502: {r.text}")
 
     @pytest.mark.timeout(120)
     def test_room_preview_generates_image(self, sess, demo_headers, real_image_b64):

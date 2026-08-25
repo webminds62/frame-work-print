@@ -3,12 +3,9 @@ P0 Bug Regression Tests — AI image-edit refactor (async litellm.aimage_edit �
 litellm.image_edit inside asyncio.to_thread with a temp PNG file).
 
 Scenarios (per review_request):
-1. POST /api/transform  style=watercolor, enhance=true, remove_bg=false  → 200 + data:image/png;base64,...
-2. POST /api/transform  style=gallery,   enhance=true, remove_bg=false  → 200 + valid image
-3. POST /api/transform  style=gallery,   enhance=true, remove_bg=true   → 200 + valid image
-4. POST /api/room-preview panels=1  → 200 + valid image
-5. POST /api/room-preview panels=3  → 200 + valid image
-6. Both endpoints must be auth-gated (401/403) without a valid Bearer token.
+1. POST /api/room-preview panels=1  → 200 + valid image
+2. POST /api/room-preview panels=3  → 200 + valid image
+3. The endpoint must be auth-gated (401/403) without a valid Bearer token.
 
 gpt-image-1 edits take 20-50s each — timeouts are set to 180s.
 """
@@ -93,21 +90,7 @@ def _assert_valid_image_response(r):
 # ---------- Auth gating ----------
 
 class TestAuthGating:
-    """/api/transform and /api/room-preview must reject unauthenticated calls."""
-
-    def test_transform_no_auth_header(self, sess):
-        r = sess.post(f"{API}/transform",
-                      json={"image_base64": TINY_PNG_DATA_URI, "style": "gallery"},
-                      timeout=15)
-        assert r.status_code in (401, 403), f"Expected 401/403, got {r.status_code}: {r.text}"
-
-    def test_transform_invalid_bearer(self, sess):
-        r = sess.post(f"{API}/transform",
-                      headers={"Authorization": "Bearer not-a-real-token",
-                               "Content-Type": "application/json"},
-                      json={"image_base64": TINY_PNG_DATA_URI, "style": "gallery"},
-                      timeout=15)
-        assert r.status_code in (401, 403), f"Expected 401/403, got {r.status_code}: {r.text}"
+    """/api/room-preview must reject unauthenticated calls."""
 
     def test_room_preview_no_auth_header(self, sess):
         r = sess.post(f"{API}/room-preview",
@@ -122,46 +105,6 @@ class TestAuthGating:
                       json={"image_base64": TINY_PNG_DATA_URI, "room": "living_room"},
                       timeout=15)
         assert r.status_code in (401, 403), f"Expected 401/403, got {r.status_code}: {r.text}"
-
-
-# ---------- P0 bug fix: /api/transform ----------
-
-class TestTransformStyles:
-    """The P0 was that Apply AI Style / Clean up crashed the Emergent proxy. Confirm each variation now returns a real image."""
-
-    @pytest.mark.timeout(AI_TIMEOUT + 30)
-    def test_transform_watercolor_enhance_no_bg(self, sess, auth_headers, real_image_data_uri):
-        payload = {
-            "image_base64": real_image_data_uri,
-            "style": "watercolor",
-            "enhance": True,
-            "remove_bg": False,
-        }
-        r = sess.post(f"{API}/transform", headers=auth_headers, json=payload, timeout=AI_TIMEOUT)
-        _assert_valid_image_response(r)
-
-    @pytest.mark.timeout(AI_TIMEOUT + 30)
-    def test_transform_gallery_enhance_no_bg(self, sess, auth_headers, real_image_data_uri):
-        payload = {
-            "image_base64": real_image_data_uri,
-            "style": "gallery",
-            "enhance": True,
-            "remove_bg": False,
-        }
-        r = sess.post(f"{API}/transform", headers=auth_headers, json=payload, timeout=AI_TIMEOUT)
-        _assert_valid_image_response(r)
-
-    @pytest.mark.timeout(AI_TIMEOUT + 30)
-    def test_transform_remove_bg_true(self, sess, auth_headers, real_image_data_uri):
-        """remove_bg=true is the second CTA that was broken on the Style screen."""
-        payload = {
-            "image_base64": real_image_data_uri,
-            "style": "gallery",
-            "enhance": True,
-            "remove_bg": True,
-        }
-        r = sess.post(f"{API}/transform", headers=auth_headers, json=payload, timeout=AI_TIMEOUT)
-        _assert_valid_image_response(r)
 
 
 # ---------- P0 bug fix: /api/room-preview ----------

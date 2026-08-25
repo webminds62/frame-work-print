@@ -58,11 +58,18 @@ images; generated mockup URLs are temporary and must not be treated as durable a
 
 ## Low-cost AI testing
 
-The API defaults to `AI_DEMO_MODE=true`. In this mode, artwork styles and room previews are
-created locally with Pillow, so no cloud API call or charge is made. The Style screen also runs
-a local print-quality check for resolution, blur, brightness, and recommended sizes.
+The app no longer applies any AI style transforms to a customer's photo — the original image a
+customer takes or uploads is what gets cropped, printed, and shipped, so nothing can make a
+customer feel their photo was altered without consent.
 
-To deliberately test cloud image editing:
+The only AI-assisted feature left is the **Room Preview**, which composites the customer's
+unmodified photo into a sample room scene purely for scale/visualization; it never changes the
+artwork itself, and the saved/printed image always stays the customer's original crop.
+
+The API defaults to `AI_DEMO_MODE=true`. In this mode, room previews are created locally with
+Pillow, so no cloud API call or charge is made.
+
+To deliberately test cloud image editing for the room preview:
 
 1. Keep `AI_IMAGE_QUALITY=low` and set a small `AI_DAILY_CLOUD_LIMIT` (the default is 3).
 2. Put an OpenAI API key only in `backend/.env` as `OPENAI_API_KEY`.

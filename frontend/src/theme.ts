@@ -81,9 +81,7 @@ export const SIZE_RECOMMENDATION: Record<string, string> = {
   hallway: "18x24",
 };
 
-// Mirrors backend resolve_printful_variant/PRINTFUL_FRAMED_VARIANTS: only canvas/poster
-// at these three sizes actually ship as a real framed product. Everything else
-// (metal/acrylic, or 30x40) ships unframed regardless of the frame the user picked.
+// These are the framed sizes currently represented by the Store catalog.
 const FRAMED_MATERIALS = new Set(["canvas", "poster"]);
 const FRAMED_SIZES = new Set(["12x16", "18x24", "24x36"]);
 export function canBeFramed(materialKey: string, sizeKey: string): boolean {

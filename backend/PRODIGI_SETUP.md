@@ -1,6 +1,6 @@
 # Prodigi API setup
 
-Frame Works uses **Prodigi** (not Printful) for print fulfillment.
+Frame Works uses **Prodigi** for print fulfillment.
 
 ## 1. Get a sandbox API key
 
@@ -15,11 +15,16 @@ PRODIGI_API_KEY=paste_sandbox_key_here
 PRODIGI_BASE_URL=https://api.sandbox.prodigi.com
 PRODIGI_MARKUP=1.6
 PRODIGI_DEFAULT_SHIPPING=Budget
+PRODIGI_WEBHOOK_SECRET=use-a-long-random-callback-token
 PRODIGI_SUBMIT_ORDERS=false
 PUBLIC_BASE_URL=https://YOUR_PUBLIC_HTTPS_API_HOST
 ```
+Use `https://api.sandbox.prodigi.com` for testing. Switch to
+`https://api.prodigi.com` only with a matching live API key when you are ready
+to place real orders.
 
 - Keep `PRODIGI_SUBMIT_ORDERS=false` until artwork URLs are publicly reachable over **HTTPS**.
+- Set `PRODIGI_WEBHOOK_SECRET` so callbacks use `/api/webhooks/prodigi?token=...` and are rejected otherwise.
 - Sandbox does **not** charge or ship real orders.
 
 ## 3. Restart the API

@@ -103,10 +103,6 @@ export const api = {
   listProjects: () => request("/projects"),
   deleteProject: (id: string) => request(`/projects/${id}`, { method: "DELETE" }),
   quote: (p: any) => request("/quote", { method: "POST", body: JSON.stringify(p) }),
-  // Real Printful product-photo mockup for the exact material/size/frame. Requires
-  // the project to already be saved server-side (project_id must exist in the DB).
-  mockup: (project_id: string, material: string, size: string, frame: string, printful_variant_id: number) =>
-    request("/mockup", { method: "POST", body: JSON.stringify({ project_id, material, size, frame, printful_variant_id }) }),
   // Server computes the price from the cart; the client can no longer set the amount.
   createPaymentIntent: (cart: any) =>
     request("/payments/create-intent", { method: "POST", body: JSON.stringify(cart) }),
@@ -114,6 +110,7 @@ export const api = {
   completePayment: (paymentIntentId: string) =>
     request(`/payments/complete/${paymentIntentId}`, { method: "POST" }),
   listOrders: () => request("/orders"),
+  trackOrder: (id: string) => request(`/orders/${id}/tracking`),
   adminStats: () => request("/admin/stats"),
   adminOrders: () => request("/admin/orders"),
   adminUpdateOrder: (id: string, status: string) =>

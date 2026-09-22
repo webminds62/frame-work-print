@@ -24,8 +24,8 @@ export default function Product() {
   const tierLabel = project.store_tier
     ? TIER_META[project.store_tier as CollectionTier]?.label || ""
     : "";
-  const frameName = project.store_family_name || project.printful_variant_name || "Your frame";
-  const frameImage = project.store_image || project.printful_variant_image || "";
+  const frameName = project.store_family_name || project.prodigi_variant_name || "Your frame";
+  const frameImage = project.store_image || project.prodigi_variant_image || "";
 
   const checkout = () => {
     if (!ready) {

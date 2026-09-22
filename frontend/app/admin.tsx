@@ -74,7 +74,7 @@ export default function Admin() {
           {orders.length === 0 ? (
             <Text style={styles.empty}>No orders yet.</Text>
           ) : orders.map((o) => {
-            const needsFulfillment = o.printful_status === "not_fulfilled_by_printful";
+            const needsFulfillment = ["prodigi_not_configured", "prodigi_submit_disabled", "prodigi_unmapped_sku", "prodigi_submit_failed"].includes(o.prodigi_status);
             return (
               <View key={o.id} style={[styles.orderRow, needsFulfillment && styles.orderRowAlert]} testID={`admin-order-${o.id}`}>
                 <Image source={{ uri: o.room_preview || o.image_base64 }} style={styles.thumb} contentFit="cover" />

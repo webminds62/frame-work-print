@@ -11,7 +11,7 @@ import { colors, spacing, radius, font, serif, PANELS } from "@/src/theme";
 import { TIER_META, type CollectionTier } from "@/src/catalog/store_skus";
 
 /**
- * Confirm step after crop. Printful catalog removed — frame comes from Store.
+ * Confirm step after crop. The selected frame comes from Store.
  * If somehow opened without a store selection, send user to Store.
  */
 export default function EditorConfirm() {

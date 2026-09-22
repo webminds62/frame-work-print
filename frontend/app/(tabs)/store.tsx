@@ -74,7 +74,7 @@ export default function StoreScreen() {
   const [panelKey, setPanelKey] = useState("single");
   const [shopSizeKey, setShopSizeKey] = useState("18x24");
 
-  // Load catalog from backend API (not Printful). Fall back to local bundle if offline.
+  // Load the catalog from the backend API, with the local bundle as an offline fallback.
   useEffect(() => {
     let cancelled = false;
     (async () => {

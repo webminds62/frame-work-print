@@ -44,7 +44,6 @@ export default function Checkout() {
         const pc = PANELS.find((p) => p.key === project.panel_key)?.count || 1;
         const q = await api.quote({
           material: project.material, size: project.size, panels: pc, frame: project.frame,
-          printful_variant_id: project.printful_variant_id || undefined,
           store_variant_id: project.store_variant_id,
           fallback_price: project.price,
           recipient: { name: "", address1: "", city: "", state_code: "", country_code: "US", zip: "" },
@@ -69,7 +68,7 @@ export default function Checkout() {
   });
 
   const startPayment = async () => {
-    if (!project.store_variant_id && !project.printful_variant_id && !(project.price > 0)) { setError("Return to the Store and choose a frame first."); return; }
+    if (!project.store_variant_id && !(project.price > 0)) { setError("Return to the Store and choose a frame first."); return; }
     for (const f of FIELDS) if (!form[f.key]?.trim()) { setError(`Please fill in ${f.label.toLowerCase()}`); return; }
     setLoading(true); setError("");
     try {
@@ -87,16 +86,13 @@ export default function Checkout() {
         store_tier: project.store_tier,
         store_image: project.store_image,
         has_mat: project.has_mat,
-        printful_variant_id: project.printful_variant_id,
-        printful_product_id: project.printful_product_id,
-        printful_variant_name: project.store_family_name || project.printful_variant_name,
-        printful_variant_image: project.store_image || project.printful_variant_image,
-        printful_retail_price: project.price,
+        prodigi_sku: project.prodigi_sku,
+        prodigi_variant_name: project.store_family_name || project.prodigi_variant_name,
+        prodigi_variant_image: project.store_image || project.prodigi_variant_image,
       });
       const res = await api.createPaymentIntent({
         project_id: saved.id, material: project.material, size: project.size,
         frame: project.frame,
-        printful_variant_id: project.printful_variant_id || 0,
         store_variant_id: project.store_variant_id,
         fallback_price: project.price,
         panel_key: project.panel_key, panels: panelCount,
@@ -155,7 +151,7 @@ export default function Checkout() {
             <Image source={{ uri: heroImg }} style={styles.thumb} contentFit="cover" />
             <View style={{ flex: 1 }}>
               <Text style={styles.summaryTitle}>{materialLabel} · {sizeLabel}</Text>
-              <Text style={styles.summaryMeta}>{panelCount > 1 ? `${panelCount}-panel · ` : ""}{project.store_family_name || project.printful_variant_name || "Gallery frame"}</Text>
+              <Text style={styles.summaryMeta}>{panelCount > 1 ? `${panelCount}-panel · ` : ""}{project.store_family_name || project.prodigi_variant_name || "Gallery frame"}</Text>
               <Text style={styles.variantMeta}>{project.store_tier ? String(project.store_tier).toUpperCase() : "FRAME WORKS"} · {project.size}</Text>
             </View>
             <View style={{ alignItems: "flex-end" }}>

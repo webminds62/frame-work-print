@@ -5,7 +5,7 @@ Clean production working copy of the iOS print-shop project.
 ## Layout
 
 - `frontend/` — Expo SDK 54 / React Native 0.81 app using Expo Router
-- `backend/` — FastAPI API with MongoDB, Stripe payments, and Printful fulfillment
+- `backend/` — FastAPI API with MongoDB, Stripe payments, and Prodigi fulfillment
 - `test_reports/` — historical reports from the source archive (some mention the removed PayPal flow)
 - `memory/` — historical product notes from the source archive
 
@@ -31,30 +31,17 @@ Payment amounts are calculated by the API. The app receives only a PaymentIntent
 and the API retrieves the intent from Stripe before creating an order. The signed webhook provides
 recovery if the app closes after payment but before the completion request returns.
 
-## Printful catalog and fulfillment
+## Prodigi catalog and fulfillment
 
-- The app syncs product and variant data from Printful's public Catalog API by default
-  (`PRINTFUL_CATALOG_MODE=live_public`). Tests and offline development can use the bundled,
-  verified snapshot with `PRINTFUL_CATALOG_MODE=snapshot`.
-- Every selectable finish and size maps to an exact Printful variant ID. That ID is saved with
-  the project, quote, payment, order, and fulfillment item; mismatches are rejected instead of
-  silently substituting another product.
-- `PRINTFUL_TOKEN` is required only for private store actions such as mockups and draft orders.
-  Use a development/private token with only the permissions needed by those endpoints. If the
-  token is account-level, also set `PRINTFUL_STORE_ID`; a store-level token supplies its context.
-- `PUBLIC_BASE_URL` must be a public HTTPS API URL so Printful can retrieve the artwork file.
-  Set `PRINTFUL_WEBHOOK_SECRET` and register
-  `https://YOUR_API_HOST/api/webhooks/printful?token=YOUR_SECRET` in the selected Printful store.
-- The current order call creates a draft by omitting `confirm=true`. Keep it that way during
-  testing so no Printful order is charged or submitted to production.
-- Webhook payloads are treated as untrusted. Before changing an order or sending a status email,
-  the API fetches `GET /orders/{id}` with the private token and verifies the order ID, store,
-  external local-order ID (for newly created orders), lifecycle status, and shipment ID. Tracking
-  links are copied only from that authenticated response. Failed provider checks return HTTP 503
-  so Printful can retry instead of silently losing the event.
-
-Never commit a Printful token or webhook secret. Catalog product images are official Printful CDN
-images; generated mockup URLs are temporary and must not be treated as durable app assets.
+- The Store catalog maps each selectable frame and size to an approved Prodigi SKU.
+- When `PRODIGI_API_KEY` is configured, the API enriches the Store response with live
+  `GET /v4.0/products/{sku}` details and uses `POST /v4.0/quotes` for server-side pricing.
+- After a verified Stripe payment, the API submits the artwork and recipient to
+  `POST /v4.0/orders` with an idempotency key and a public HTTPS asset URL.
+- Prodigi callbacks are handled at `/api/webhooks/prodigi`; the handler re-fetches the order
+  through the authenticated API before changing local status or tracking data.
+- Keep `PRODIGI_SUBMIT_ORDERS=false` until sandbox testing and public asset delivery are ready.
+  Never commit a Prodigi API key or webhook secret.
 
 ## Low-cost AI testing
 
@@ -90,7 +77,7 @@ Never put the server API key in the Expo environment or commit it to GitHub.
 - Perform a physical-device test build. Stripe's native Apple Pay path cannot be validated in Expo Go.
 
 Do not publish or switch to Stripe live mode until test-mode payments, webhook retries, refunds,
-Printful fulfillment, account deletion, and restore/error scenarios have been verified end-to-end.
+Prodigi fulfillment, account deletion, and restore/error scenarios have been verified end-to-end.
 
 
 - `comfy-studio/` — Pinokio ComfyUI Studio launcher

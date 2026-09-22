@@ -189,11 +189,11 @@ async def create_order(
     }
     if callback_url:
         body["callbackUrl"] = callback_url
-    return await _request("POST", "/v4.0/orders", json_body=body)
+    return await _request("POST", "/v4.0/Orders", json_body=body)
 
 
 async def get_order(order_id: str) -> dict:
-    return await _request("GET", f"/v4.0/orders/{order_id}")
+    return await _request("GET", f"/v4.0/Orders/{order_id}")
 
 
 def parse_quote_totals(quote_response: dict) -> dict:
@@ -207,12 +207,23 @@ def parse_quote_totals(quote_response: dict) -> dict:
         quotes = [quote_response]
 
     best = quotes[0] if quotes else quote_response
-    cost = best.get("cost") or best.get("costs") or {}
+    cost = best.get("costSummary") or best.get("cost") or best.get("costs") or {}
     if isinstance(cost, list) and cost:
         cost = cost[0]
 
+    def _amount(value: Any) -> Optional[float]:
+        if isinstance(value, dict):
+            value = value.get("amount")
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
     def _num(*keys, default=0.0):
         for k in keys:
+            value = _amount(cost.get(k))
+            if value is not None:
+                return value
             if k in cost and cost[k] is not None:
                 try:
                     return float(cost[k])
@@ -231,7 +242,7 @@ def parse_quote_totals(quote_response: dict) -> dict:
     if total and not product:
         product = max(0.0, total - shipping)
     currency = (
-        cost.get("currency")
+        (cost.get("currency") or {}).get("currency") if isinstance(cost.get("currency"), dict) else cost.get("currency")
         or best.get("currency")
         or quote_response.get("currency")
         or "USD"

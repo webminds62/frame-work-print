@@ -29,15 +29,6 @@ from ai_features import (
     demo_room_preview,
     generation_cache_key,
 )
-from printful_catalog import (
-    CatalogVariant,
-    find_selection,
-    find_variant,
-    get_catalog,
-    serialize_variants,
-    snapshot_variants,
-)
-
 from pathlib import Path as _PathForDotenv
 from dotenv import load_dotenv as _load_dotenv_early
 _load_dotenv_early(_PathForDotenv(__file__).resolve().parent / ".env")
@@ -66,10 +57,7 @@ if IMAGE_QUALITY not in {"low", "medium", "high"}:
 IMAGE_API_KEY = OPENAI_API_KEY
 IMAGE_PROXY_BASE = None
 
-PRINTFUL_TOKEN = os.environ.get('PRINTFUL_TOKEN', '')
-PRINTFUL_STORE_ID = os.environ.get('PRINTFUL_STORE_ID', '')
 PUBLIC_BASE_URL = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/')
-PRINTFUL_MARKUP = float(os.environ.get('PRINTFUL_MARKUP', '1.6'))
 INHOUSE_SHIPPING = 12.0
 
 # Emergent-managed Resend email (base URL is a hardcoded constant so it survives deploy)
@@ -80,14 +68,13 @@ EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Frame Works Prints")
 # Admin seeding + webhook auth (secrets come from env — never hard-coded)
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
-PRINTFUL_WEBHOOK_SECRET = os.environ.get("PRINTFUL_WEBHOOK_SECRET", "")
-
-# Prodigi Print API (preferred fulfillment)
+# Prodigi Print API
 PRODIGI_API_KEY = os.environ.get("PRODIGI_API_KEY", "").strip()
 PRODIGI_BASE_URL = os.environ.get("PRODIGI_BASE_URL", "https://api.sandbox.prodigi.com").rstrip("/")
-PRODIGI_MARKUP = float(os.environ.get("PRODIGI_MARKUP", os.environ.get("PRINTFUL_MARKUP", "1.6")))
+PRODIGI_MARKUP = float(os.environ.get("PRODIGI_MARKUP", "1.6"))
 PRODIGI_DEFAULT_SHIPPING = os.environ.get("PRODIGI_DEFAULT_SHIPPING", "Budget")
 PRODIGI_SUBMIT_ORDERS = os.environ.get("PRODIGI_SUBMIT_ORDERS", "false").strip().lower() in {"1", "true", "yes", "on"}
+PRODIGI_WEBHOOK_SECRET = os.environ.get("PRODIGI_WEBHOOK_SECRET", "").strip()
 
 
 # Sign in with Apple
@@ -105,8 +92,6 @@ VALID_ORDER_STATUS = {"received", "in_production", "shipped", "delivered", "canc
 
 
 def compute_base_price(material: str, size: str, frame: str, panels: int, is_framed: bool = True) -> float:
-    """is_framed must come from resolve_printful_variant — never charge the frame
-    surcharge for a combo that can't actually ship framed (wrong size/material)."""
     n = max(1, panels or 1)
     base = MATERIAL_BASE.get(material, 49)
     smult = SIZE_MULT.get(size, 1.0)
@@ -119,84 +104,6 @@ def normalize_finish(material: str, finish: str) -> str:
     if finish == "wood":
         return "brown" if material == "canvas" else "red_oak"
     return finish or "none"
-
-
-def resolve_printful_variant(material: str, size: str, frame: str):
-    """Legacy read-only resolver with no product substitution.
-
-    New app flows persist a concrete printful_variant_id. This helper remains for
-    older saved projects, but unlike the former implementation it never silently
-    converts an unavailable framed choice into an unframed product.
-    """
-    finish = normalize_finish(material, frame)
-    variant = find_selection(snapshot_variants(PRINTFUL_MARKUP), material, size, finish)
-    return (variant.id, variant.framed) if variant else (None, False)
-
-
-async def validated_printful_variant(
-    variant_id: int,
-    material: str,
-    size: str,
-    frame: str,
-    *,
-    require_in_stock: bool = True,
-) -> CatalogVariant:
-    variants, _, _ = await get_catalog(PRINTFUL_MARKUP)
-    variant = find_variant(variants, int(variant_id))
-    expected_finish = normalize_finish(material, frame)
-    if not variant:
-        raise HTTPException(status_code=422, detail="The selected Printful variant is not in the approved wall-art catalog.")
-    if (variant.material, variant.size_key, variant.finish_key) != (material, size, expected_finish):
-        raise HTTPException(status_code=422, detail="The selected Printful variant does not match the chosen product, size, and finish.")
-    if require_in_stock and not variant.in_stock:
-        raise HTTPException(status_code=409, detail="The selected Printful variant is currently out of stock.")
-    return variant
-
-
-async def generate_printful_mockup(project_id: str, variant: CatalogVariant) -> Optional[dict]:
-    """Request a real product photo mockup for one exact validated variant.
-    Returns None when account authorization or a public print-file URL is unavailable,
-    so callers can continue showing the official Catalog API product image.
-    Note: this renders ONE representative panel — see server.py multi-panel print-file
-    handling for why the true panel-split print isn't reproduced here."""
-    if not (PRINTFUL_TOKEN and variant.id and variant.product_id and PUBLIC_BASE_URL):
-        return None
-    image_url = f"{PUBLIC_BASE_URL}/api/public/project/{project_id}"
-    headers = {"Authorization": f"Bearer {PRINTFUL_TOKEN}", "Content-Type": "application/json"}
-    if PRINTFUL_STORE_ID:
-        headers["X-PF-Store-Id"] = PRINTFUL_STORE_ID
-    payload = {
-        "variant_ids": [variant.id],
-        "format": "jpg",
-        "files": [{"placement": "default", "image_url": image_url}],
-    }
-    try:
-        async with httpx.AsyncClient(base_url="https://api.printful.com", headers=headers, timeout=30) as c:
-            r = await c.post(f"/mockup-generator/create-task/{variant.product_id}", json=payload)
-            if r.status_code >= 400:
-                logger.error(f"Printful mockup create-task error {r.status_code}: {r.text[:300]}")
-                return None
-            task_key = (r.json().get("result") or {}).get("task_key")
-            if not task_key:
-                return None
-            for _ in range(18):  # ~27s max
-                await asyncio.sleep(1.5)
-                pr = await c.get("/mockup-generator/task", params={"task_key": task_key})
-                result = (pr.json().get("result") or {}) if pr.status_code < 400 else {}
-                status = result.get("status")
-                if status == "completed":
-                    mockups = result.get("mockups") or []
-                    if mockups and mockups[0].get("mockup_url"):
-                        return {"mockup_url": mockups[0]["mockup_url"], "product_id": variant.product_id, "variant_id": variant.id}
-                    return None
-                if status == "failed":
-                    logger.error(f"Printful mockup task failed: {result}")
-                    return None
-            logger.warning(f"Printful mockup task {task_key} timed out")
-            return None
-    except Exception as e:
-        logger.error(f"Printful mockup generation error: {e}")
-        return None
 
 
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -263,11 +170,9 @@ class ProjectIn(BaseModel):
     store_tier: Optional[str] = None
     store_image: Optional[str] = None
     has_mat: Optional[bool] = None
-    printful_variant_id: Optional[int] = None
-    printful_product_id: Optional[int] = None
-    printful_variant_name: Optional[str] = None
-    printful_variant_image: Optional[str] = None
-    printful_retail_price: Optional[float] = None
+    prodigi_sku: Optional[str] = None
+    prodigi_variant_name: Optional[str] = None
+    prodigi_variant_image: Optional[str] = None
 
 
 class Recipient(BaseModel):
@@ -528,8 +433,7 @@ async def delete_account(user=Depends(get_current_user)):
 
 
 # ---------- AI ----------
-# Per-material frame descriptions for the room-preview prompt. These labels match
-# the exact finish keys returned by the verified Printful catalog boundary.
+# Per-material frame descriptions for the room-preview prompt.
 def frame_description(material: str, frame: str) -> str:
     if frame == "none":
         if material == "canvas":
@@ -648,9 +552,8 @@ class QuoteIn(BaseModel):
     size: str
     panels: int = 1
     frame: Optional[str] = "none"
-    printful_variant_id: Optional[int] = None
     store_variant_id: Optional[str] = None
-    # Gallery store retail when no Printful/Prodigi live quote is used.
+    # Gallery store retail when Prodigi is not configured or unavailable.
     fallback_price: Optional[float] = None
     recipient: Recipient
 
@@ -662,11 +565,10 @@ async def compute_quote(
     frame: str,
     panels: int,
     recipient: dict,
-    printful_variant_id: Optional[int] = None,
     store_variant_id: Optional[str] = None,
     fallback_price: Optional[float] = None,
 ) -> dict:
-    """Server-authoritative price. Prefers gallery/store price; Printful path optional."""
+    """Server-authoritative price using the selected Prodigi product when available."""
     frame = frame or "none"
     n = max(1, panels or 1)
     prior = await db.orders.count_documents({"user_id": user_id, "material": {"$exists": True}})
@@ -693,31 +595,31 @@ async def compute_quote(
         out.update(extra)
         return out
 
-    # Curated Frame Works gallery path (no Printful catalog required).
-    if store_variant_id or (fallback_price is not None and printful_variant_id in (None, 0)):
-        if fallback_price is None or float(fallback_price) <= 0:
-            raise HTTPException(status_code=422, detail="Choose a frame in the Store before checkout.")
-        product = round(float(fallback_price), 2)
-        shipping = INHOUSE_SHIPPING
-        return finalize_gallery(product + shipping, product, shipping)
-
-    variant_id = printful_variant_id if printful_variant_id not in (None, 0) else None
-    if variant_id is None:
-        try:
-            variant_id, _ = resolve_printful_variant(material, size, frame)
-        except Exception:
-            variant_id = None
-    if variant_id is None:
-        if fallback_price is not None and float(fallback_price) > 0:
-            product = round(float(fallback_price), 2)
-            return finalize_gallery(product + INHOUSE_SHIPPING, product, INHOUSE_SHIPPING)
+    if not store_variant_id:
+        raise HTTPException(status_code=422, detail="Choose a frame in the Store before checkout.")
+    mapping = resolve_prodigi(store_variant_id, size_key=size)
+    if not mapping:
+        raise HTTPException(status_code=422, detail="This frame is not mapped to a Prodigi product yet.")
+    if fallback_price is None or float(fallback_price) <= 0:
         raise HTTPException(status_code=422, detail="Choose a frame in the Store before checkout.")
 
-    variant = await validated_printful_variant(variant_id, material, size, frame)
-    base_price = round(variant.retail_price * n, 2)
+    if not prodigi_client.configured():
+        product = round(float(fallback_price), 2)
+        return finalize_gallery(product + INHOUSE_SHIPPING, product, INHOUSE_SHIPPING, source="gallery_fallback", prodigi_sku=mapping["sku"], prodigi_attributes=mapping["attributes"])
 
-    def finalize(retail, product, shipping, base_cost, source, currency="USD"):
-        retail = round(retail, 2)
+    try:
+        raw = await prodigi_client.create_quote(
+            sku=mapping["sku"],
+            copies=n,
+            attributes=mapping["attributes"] or None,
+            destination_country_code=(recipient.get("country_code") or "US").upper(),
+        )
+        totals = prodigi_client.parse_quote_totals(raw)
+        product = round(totals["product"] * prodigi_client.PRODIGI_MARKUP, 2)
+        shipping = round(totals["shipping"] * prodigi_client.PRODIGI_MARKUP, 2)
+        if product <= 0:
+            raise ValueError("Prodigi returned no product cost")
+        retail = round(product + shipping, 2)
         discount_amount = round(retail * disc_pct, 2)
         return {
             "retail": round(retail - discount_amount, 2),
@@ -725,66 +627,26 @@ async def compute_quote(
             "first_order": first_order,
             "discount_pct": disc_pct,
             "discount_amount": discount_amount,
-            "product": round(product, 2),
-            "shipping": round(shipping, 2),
-            "base_cost": base_cost,
-            "source": source,
-            "currency": currency,
-            "printful_variant_id": variant.id,
-            "printful_product_id": variant.product_id,
-            "printful_variant_name": variant.name,
-            "printful_variant_image": variant.image,
-            "finish_label": variant.finish_label,
+            "product": product,
+            "shipping": shipping,
+            "base_cost": totals.get("total"),
+            "source": "prodigi",
+            "currency": totals.get("currency") or "USD",
+            "prodigi_sku": mapping["sku"],
+            "prodigi_attributes": mapping["attributes"],
+            "finish_label": frame,
         }
-
-    if not PRINTFUL_TOKEN:
-        return finalize(base_price + INHOUSE_SHIPPING, base_price, INHOUSE_SHIPPING, None, "catalog")
-    headers = {"Authorization": f"Bearer {PRINTFUL_TOKEN}"}
-    if PRINTFUL_STORE_ID:
-        headers["X-PF-Store-Id"] = PRINTFUL_STORE_ID
-    payload = {
-        "recipient": {
-            "address1": recipient.get("address1", ""),
-            "city": recipient.get("city", ""),
-            "state_code": recipient.get("state_code"),
-            "country_code": recipient.get("country_code", "US"),
-            "zip": recipient.get("zip", ""),
-        },
-        "items": [{
-            "variant_id": variant.id,
-            "quantity": n,
-            "files": [{"url": f"{PUBLIC_BASE_URL}/api/public/project/placeholder"}],
-        }],
-    }
-    try:
-        async with httpx.AsyncClient(base_url="https://api.printful.com", headers=headers, timeout=45) as c:
-            r = await c.post("/orders/estimate-costs", json=payload)
-            if r.status_code >= 400:
-                logger.error(f"Printful estimate error {r.status_code}: {r.text[:200]}")
-                raise Exception("estimate failed")
-            costs = (r.json().get("result") or {}).get("costs") or {}
-            base_cost = float(costs.get("total") or 0)
-            shipping = float(costs.get("shipping") or 0)
-            if base_cost <= 0:
-                raise Exception("no cost")
-            return finalize(
-                base_cost * PRINTFUL_MARKUP,
-                (base_cost - shipping) * PRINTFUL_MARKUP,
-                shipping * PRINTFUL_MARKUP,
-                round(base_cost, 2),
-                "printful",
-                costs.get("currency", "USD"),
-            )
     except Exception as e:
-        logger.error(f"quote fallback: {e}")
-        return finalize(base_price + INHOUSE_SHIPPING, base_price, INHOUSE_SHIPPING, None, "fallback")
+        logger.error("Prodigi quote failed: %s", e)
+        product = round(float(fallback_price), 2)
+        return finalize_gallery(product + INHOUSE_SHIPPING, product, INHOUSE_SHIPPING, source="gallery_fallback", prodigi_sku=mapping["sku"], prodigi_attributes=mapping["attributes"])
 
 
 @api_router.post("/quote")
 async def quote(data: QuoteIn, user=Depends(get_current_user)):
     return await compute_quote(
         user["id"], data.material, data.size, data.frame or "none",
-        data.panels, data.recipient.model_dump(), data.printful_variant_id,
+        data.panels, data.recipient.model_dump(),
         store_variant_id=data.store_variant_id, fallback_price=data.fallback_price,
     )
 
@@ -803,12 +665,14 @@ async def prodigi_status():
         "markup": prodigi_client.PRODIGI_MARKUP,
         "public_base_url_set": bool(PUBLIC_BASE_URL and PUBLIC_BASE_URL.startswith("http")),
         "public_base_url_https": bool(PUBLIC_BASE_URL and PUBLIC_BASE_URL.startswith("https://")),
+        "webhook_secret_set": bool(PRODIGI_WEBHOOK_SECRET),
         "ready_to_quote": prodigi_client.configured(),
         "ready_to_submit_orders": bool(
             prodigi_client.configured()
             and prodigi_client.PRODIGI_SUBMIT_ORDERS
             and PUBLIC_BASE_URL
             and PUBLIC_BASE_URL.startswith("https://")
+            and PRODIGI_WEBHOOK_SECRET
         ),
         "hint": (
             None
@@ -822,7 +686,7 @@ async def prodigi_status():
 async def store_catalog():
     """Full curated Frame Works gallery catalog (Essential / Gallery / Atelier).
 
-    This is the source of truth for the Store UI — not Printful.
+    This is the source of truth for the Store UI.
     Includes families, sizes, variants, prices, and Prodigi mapping hints.
     Public so the Store can load before/without blocking on edge auth issues.
     """
@@ -846,15 +710,31 @@ async def store_catalog():
             "attributes": spec.get("attributes") or {},
         }
 
-    # Annotate variants with prodigi sku when mappable
+    # Annotate variants with Prodigi SKUs and live product details when configured.
     variants = []
+    prodigi_skus: set[str] = set()
     for v in payload.get("variants") or []:
         mapped = resolve_prodigi(v.get("id"), size_key=v.get("size_key") or "", family_id=v.get("family_id") or "")
         item = dict(v)
         if mapped:
             item["prodigi_sku"] = mapped.get("sku")
             item["prodigi_attributes"] = mapped.get("attributes") or {}
+            prodigi_skus.add(mapped["sku"])
         variants.append(item)
+
+    prodigi_products: dict[str, dict] = {}
+    if prodigi_client.configured():
+        results = await asyncio.gather(
+            *(prodigi_client.get_product(sku) for sku in sorted(prodigi_skus)),
+            return_exceptions=True,
+        )
+        for sku, result in zip(sorted(prodigi_skus), results):
+            if isinstance(result, dict):
+                prodigi_products[sku] = result.get("product") or result
+        for item in variants:
+            product = prodigi_products.get(item.get("prodigi_sku"))
+            if product:
+                item["prodigi_product"] = product
 
     return {
         "version": payload.get("version", 1),
@@ -868,7 +748,8 @@ async def store_catalog():
         "variant_count": len(variants),
         "family_count": len(payload.get("families") or []),
         "fulfillment_by_family": fulfillment_by_family,
-        "note": "Curated gallery catalog from the API. Room preview uses each variant frame_key.",
+        "prodigi_products": prodigi_products,
+        "note": "Curated store catalog enriched with live Prodigi product details when configured.",
     }
 
 
@@ -935,8 +816,11 @@ async def prodigi_quote_endpoint(data: QuoteIn, user=Depends(get_current_user)):
 
 
 @api_router.post("/webhooks/prodigi")
-async def prodigi_webhook(request: Request):
-    """Prodigi order status callback. Treat as untrusted; re-fetch order when possible."""
+async def prodigi_webhook(request: Request, token: str = ""):
+    """Prodigi order status callback, protected by a deployment-owned token."""
+    if not PRODIGI_WEBHOOK_SECRET or not hmac.compare_digest(token, PRODIGI_WEBHOOK_SECRET):
+        logger.warning("Rejected Prodigi webhook (secret unset or token invalid)")
+        return {"ok": True}
     try:
         payload = await request.json()
     except Exception:
@@ -1015,7 +899,9 @@ async def submit_prodigi_order(order_id: str, project_id: str, cart: dict, user:
 
     asset_url = f"{PUBLIC_BASE_URL}/api/public/project/{project_id}"
     recipient = prodigi_client.recipient_from_app(cart.get("recipient") or {}, email=user.get("email") or "")
-    callback = f"{PUBLIC_BASE_URL}/api/webhooks/prodigi" if PUBLIC_BASE_URL.startswith("https") else None
+    callback = None
+    if PUBLIC_BASE_URL.startswith("https") and PRODIGI_WEBHOOK_SECRET:
+        callback = f"{PUBLIC_BASE_URL}/api/webhooks/prodigi?token={PRODIGI_WEBHOOK_SECRET}"
     try:
         result = await prodigi_client.create_order(
             merchant_reference=order_id,
@@ -1036,30 +922,7 @@ async def submit_prodigi_order(order_id: str, project_id: str, cart: dict, user:
         return "received", "prodigi_submit_failed", None
 
 
-class MockupIn(BaseModel):
-    project_id: str
-    material: str
-    size: str
-    frame: Optional[str] = "none"
-    printful_variant_id: int
-
-
-@api_router.post("/mockup")
-async def mockup(data: MockupIn, user=Depends(get_current_user)):
-    """Real Printful product-photo mockup for the exact material/size/frame selected.
-    Returns {available: false} when the mockup API is not configured, together with
-    the official catalog image for the already-validated exact variant."""
-    doc = await db.projects.find_one({"id": data.project_id, "user_id": user["id"]})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Project not found")
-    variant = await validated_printful_variant(data.printful_variant_id, data.material, data.size, data.frame or "none")
-    result = await generate_printful_mockup(data.project_id, variant)
-    if not result:
-        return {"available": False, "catalog_image": variant.image, "variant_id": variant.id}
-    return {"available": True, **result}
-
-
-# ---------- Public project image (unauthenticated so Printful can fetch it) ----------
+# ---------- Public project image (unauthenticated so Prodigi can fetch it) ----------
 @api_router.get("/public/project/{project_id}")
 async def public_project_image(project_id: str, panel: int = 0, of: int = 1):
     doc = await db.projects.find_one({"id": project_id})
@@ -1181,103 +1044,27 @@ async def send_order_email(to_email: str, order: dict):
     await _post_email(to_email, f"Order confirmed · #{oid} — Frame Works Prints", html)
 
 
-async def submit_printful_order(
-    external_order_id: str,
-    project_id: str,
-    material: str,
-    size: str,
-    panels: int,
-    frame: str,
-    printful_variant_id: int,
-    recipient: dict,
-):
-    """Create a Printful draft order. Returns (status, printful_status, printful_order_id)."""
-    variant = await validated_printful_variant(printful_variant_id, material, size, frame)
-    if not PRINTFUL_TOKEN:
-        return "received", "printful_not_configured", None
-    if not PUBLIC_BASE_URL or not project_id:
-        return "received", "not_fulfilled_by_printful", None
-    n = max(1, panels or 1)
-    items = []
-    for i in range(n):
-        url = f"{PUBLIC_BASE_URL}/api/public/project/{project_id}"
-        if n > 1:
-            url += f"?panel={i}&of={n}"
-        items.append({"variant_id": variant.id, "quantity": 1, "files": [{"url": url}]})
-    payload = {
-        "external_id": external_order_id,
-        "recipient": {
-            "name": recipient["name"], "address1": recipient["address1"], "city": recipient["city"],
-            "state_code": recipient.get("state_code"), "country_code": recipient.get("country_code", "US"),
-            "zip": recipient["zip"],
-        },
-        "items": items,
-    }
-    headers = {"Authorization": f"Bearer {PRINTFUL_TOKEN}"}
-    if PRINTFUL_STORE_ID:
-        headers["X-PF-Store-Id"] = PRINTFUL_STORE_ID
-    try:
-        async with httpx.AsyncClient(base_url="https://api.printful.com", headers=headers, timeout=90) as c:
-            r = await c.post("/orders", json=payload)
-            if r.status_code >= 400:
-                logger.error(f"Printful order error {r.status_code}: {r.text[:300]}")
-                return "received", f"printful_error_{r.status_code}", None
-            pid = str((r.json().get("result") or {}).get("id") or "")
-            return "in_production", ("framed_draft_created" if variant.framed else "draft_created"), pid
-    except Exception as e:
-        logger.error(f"Printful call failed: {e}")
-        return "received", "printful_unreachable", None
-
-
 async def create_order_internal(user: dict, cart: dict, price: float, stripe_payment_intent_id: str) -> dict:
     """Create the fulfilled order. Called ONLY after a verified Stripe payment — never
     directly by the client, so orders cannot be placed without payment."""
     project = await db.projects.find_one({"id": cart.get("project_id"), "user_id": user["id"]}) or {}
     order_id = str(uuid.uuid4())
-    pf_variant_id = cart.get("printful_variant_id")
     store_variant_id = cart.get("store_variant_id") or project.get("store_variant_id")
-    use_gallery = bool(store_variant_id) or pf_variant_id in (None, 0, "")
 
     status = "received"
-    printful_status = "not_fulfilled_by_printful"
-    printful_order_id = None
-    variant = None
+    prodigi_status = "prodigi_not_configured"
+    prodigi_order_id = None
     finish_label = cart.get("frame") or project.get("frame") or "none"
 
-    if not use_gallery and pf_variant_id:
-        try:
-            status, printful_status, printful_order_id = await submit_printful_order(
-                order_id, cart.get("project_id"), cart["material"], cart["size"], cart.get("panels") or 1,
-                cart.get("frame") or "none", pf_variant_id, cart["recipient"],
-            )
-            variant = await validated_printful_variant(
-                pf_variant_id, cart["material"], cart["size"], cart.get("frame") or "none"
-            )
-            finish_label = getattr(variant, "finish_label", finish_label)
-        except Exception as exc:
-            logger.error("Printful submit skipped/failed for gallery-safe path: %s", exc)
-            status, printful_status, printful_order_id = "received", "not_fulfilled_by_printful", None
-    else:
-        # Frame Works gallery order — Prodigi when configured+enabled, else manual.
-        status, printful_status, printful_order_id = await submit_prodigi_order(
-            order_id, cart.get("project_id") or "", cart, user
-        )
-        if printful_status == "gallery_manual" or printful_status.startswith("prodigi_"):
-            # keep status received unless submit started production
-            pass
+    status, prodigi_status, prodigi_order_id = await submit_prodigi_order(
+        order_id, cart.get("project_id") or "", cart, user
+    )
 
     frame_name = (
-        (getattr(variant, "name", None) if variant else None)
-        or project.get("store_family_name")
-        or cart.get("printful_variant_name")
-        or project.get("printful_variant_name")
-        or "Gallery frame"
+        project.get("store_family_name") or cart.get("store_family_name") or "Gallery frame"
     )
     frame_image = (
-        (getattr(variant, "image", None) if variant else None)
-        or project.get("store_image")
-        or cart.get("printful_variant_image")
-        or project.get("printful_variant_image")
+        project.get("store_image") or cart.get("store_image")
     )
 
     doc = {
@@ -1285,9 +1072,8 @@ async def create_order_internal(user: dict, cart: dict, price: float, stripe_pay
         "user_id": user["id"],
         "user_email": user["email"],
         "status": status,
-        "printful_status": printful_status,
-        "printful_order_id": printful_order_id,
-        "prodigi_order_id": printful_order_id if (printful_status or "").startswith("prodigi") or (printful_order_id and str(printful_order_id).startswith("ord_")) else None,
+        "prodigi_status": prodigi_status,
+        "prodigi_order_id": prodigi_order_id,
         "prodigi_sku": (resolve_prodigi(store_variant_id, size_key=cart.get("size") or "") or {}).get("sku"),
         "stripe_payment_intent_id": stripe_payment_intent_id,
         "project_id": cart.get("project_id"),
@@ -1296,15 +1082,13 @@ async def create_order_internal(user: dict, cart: dict, price: float, stripe_pay
         "material": cart.get("material") or project.get("material"),
         "size": cart.get("size") or project.get("size"),
         "frame": cart.get("frame") or project.get("frame") or "none",
-        "printful_variant_id": getattr(variant, "id", None) if variant else None,
-        "printful_product_id": getattr(variant, "product_id", None) if variant else None,
-        "printful_variant_name": frame_name,
-        "printful_variant_image": frame_image,
+        "prodigi_variant_name": frame_name,
+        "prodigi_variant_image": frame_image,
         "store_variant_id": store_variant_id,
         "store_family_name": project.get("store_family_name") or cart.get("store_family_name"),
         "store_tier": project.get("store_tier"),
-        "price_source": cart.get("price_source") or ("gallery" if use_gallery else "printful"),
-        "printful_finish_label": finish_label,
+        "price_source": cart.get("price_source") or "prodigi",
+        "prodigi_finish_label": finish_label,
         "panel_key": cart.get("panel_key") or project.get("panel_key"),
         "panels": cart.get("panels") or 1,
         "price": round(price, 2),
@@ -1325,6 +1109,55 @@ async def list_orders(user=Depends(get_current_user)):
     return docs
 
 
+@api_router.get("/orders/{order_id}/tracking")
+async def track_order(order_id: str, user=Depends(get_current_user)):
+    """Fetch the owned order from Prodigi's GET /v4.0/Orders/{id} endpoint."""
+    local = await db.orders.find_one({"id": order_id, "user_id": user["id"]}, {"_id": 0})
+    if not local:
+        raise HTTPException(status_code=404, detail="Order not found")
+    prodigi_id = str(local.get("prodigi_order_id") or "")
+    if not prodigi_id:
+        raise HTTPException(status_code=409, detail="This order has not been submitted to Prodigi")
+    if not prodigi_client.configured():
+        raise HTTPException(status_code=503, detail="Prodigi tracking is not configured")
+    try:
+        response = await prodigi_client.get_order(prodigi_id)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Prodigi order not found") from exc
+        raise HTTPException(status_code=502, detail="Prodigi tracking unavailable") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Prodigi tracking unavailable") from exc
+
+    remote = response.get("order") or response
+    stage = (remote.get("status") or {}).get("stage")
+    shipments = remote.get("shipments") or []
+    tracking = []
+    for shipment in shipments:
+        shipment_tracking = shipment.get("tracking") or {}
+        tracking.append({
+            "id": shipment.get("id"),
+            "status": shipment.get("status"),
+            "carrier": shipment.get("carrier"),
+            "url": shipment_tracking.get("url") or shipment.get("trackingUrl") or "",
+            "number": shipment_tracking.get("number") or "",
+        })
+    status_map = {"InProgress": "in_production", "Complete": "shipped", "Cancelled": "cancelled"}
+    update = {"prodigi_stage": stage, "prodigi_last_checked_at": datetime.now(timezone.utc).isoformat()}
+    if tracking and tracking[0].get("url"):
+        update["tracking_url"] = tracking[0]["url"]
+    if stage in status_map:
+        update["status"] = status_map[stage]
+    await db.orders.update_one({"id": order_id}, {"$set": update})
+    return {
+        "local_order_id": order_id,
+        "prodigi_order_id": prodigi_id,
+        "stage": stage,
+        "status": status_map.get(stage, local.get("status")),
+        "shipments": tracking,
+    }
+
+
 # ---------- Admin ----------
 @api_router.get("/admin/stats")
 async def admin_stats(user=Depends(require_admin)):
@@ -1332,8 +1165,8 @@ async def admin_stats(user=Depends(require_admin)):
     orders = await db.orders.find(q).to_list(1000)
     revenue = sum(o.get("price", 0) for o in orders)
     # Orders that took payment but have no automated fulfillment path need manual handling.
-    unfulfilled_statuses = {"not_fulfilled_by_printful", "printful_not_configured"}
-    unfulfilled = sum(1 for o in orders if o.get("printful_status") in unfulfilled_statuses)
+    unfulfilled_statuses = {"prodigi_not_configured", "prodigi_submit_disabled", "prodigi_unmapped_sku", "prodigi_submit_failed"}
+    unfulfilled = sum(1 for o in orders if o.get("prodigi_status") in unfulfilled_statuses)
     return {
         "total_orders": len(orders),
         "revenue": round(revenue, 2),
@@ -1384,7 +1217,6 @@ class PaymentCreateIn(BaseModel):
     material: str
     size: str
     frame: str = "none"
-    printful_variant_id: Optional[int] = None
     store_variant_id: Optional[str] = None
     fallback_price: Optional[float] = None
     panel_key: Optional[str] = None
@@ -1419,16 +1251,9 @@ async def create_payment(data: PaymentCreateIn, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Project not found")
     store_variant_id = data.store_variant_id or project.get("store_variant_id")
     fallback_price = data.fallback_price if data.fallback_price is not None else project.get("price")
-    use_gallery = bool(store_variant_id) or (data.printful_variant_id in (None, 0) and fallback_price)
-    variant = None
-    if not use_gallery:
-        variant = await validated_printful_variant(data.printful_variant_id, data.material, data.size, data.frame)
-        saved_variant_id = project.get("printful_variant_id")
-        if saved_variant_id is not None and int(saved_variant_id) != variant.id:
-            raise HTTPException(status_code=409, detail="The checkout variant no longer matches the saved project selection.")
     q = await compute_quote(
         user["id"], data.material, data.size, data.frame, data.panels,
-        data.recipient.model_dump(), data.printful_variant_id,
+        data.recipient.model_dump(),
         store_variant_id=store_variant_id, fallback_price=fallback_price,
     )
     amount = q["retail"]
@@ -1450,10 +1275,9 @@ async def create_payment(data: PaymentCreateIn, user=Depends(get_current_user)):
         "user_id": user["id"], "project_id": data.project_id,
         "amount": amount, "currency": currency, "status": "created",
         "material": data.material, "size": data.size, "frame": data.frame,
-        "printful_variant_id": getattr(variant, "id", None) if variant else None,
-        "printful_product_id": getattr(variant, "product_id", None) if variant else None,
-        "printful_variant_name": (getattr(variant, "name", None) if variant else None) or project.get("store_family_name") or project.get("printful_variant_name"),
-        "printful_variant_image": (getattr(variant, "image", None) if variant else None) or project.get("store_image") or project.get("printful_variant_image"),
+        "prodigi_sku": q.get("prodigi_sku") or (resolve_prodigi(store_variant_id, size_key=data.size) or {}).get("sku"),
+        "prodigi_variant_name": project.get("store_family_name"),
+        "prodigi_variant_image": project.get("store_image"),
         "store_variant_id": store_variant_id,
         "store_family_name": project.get("store_family_name"),
         "price_source": q.get("source"),
@@ -1552,177 +1376,6 @@ async def stripe_webhook(request: Request):
                 if exc.status_code != 404:
                     raise
     return {"received": True}
-
-
-# ---------- Printful webhooks (order tracking) ----------
-PRINTFUL_EVENT_STATUS_POLICY = {
-    "package_shipped": ({"partial", "fulfilled"}, "shipped"),
-    "package_returned": ({"partial", "fulfilled"}, "received"),
-    "order_put_hold": ({"onhold"}, "in_production"),
-    "order_remove_hold": ({"pending", "inreview", "inprocess"}, "in_production"),
-    "order_failed": ({"failed"}, "cancelled"),
-    "order_canceled": ({"canceled"}, "cancelled"),
-}
-
-
-class PrintfulVerificationUnavailable(RuntimeError):
-    """The authenticated Printful cross-check could not be completed."""
-
-
-def printful_auth_headers() -> dict[str, str]:
-    headers = {"Authorization": f"Bearer {PRINTFUL_TOKEN}"}
-    if PRINTFUL_STORE_ID:
-        headers["X-PF-Store-Id"] = PRINTFUL_STORE_ID
-    return headers
-
-
-async def fetch_printful_order(printful_order_id: str) -> Optional[dict]:
-    """Fetch an order through the authenticated API; never trust webhook order data."""
-    if not PRINTFUL_TOKEN:
-        raise PrintfulVerificationUnavailable("Printful order verification is not configured")
-    # Printful webhook order IDs are integers. Refusing anything else also prevents an
-    # untrusted payload from changing the API path (the API's @external-id form is not needed here).
-    if not printful_order_id.isdigit():
-        return None
-    try:
-        async with httpx.AsyncClient(
-            base_url="https://api.printful.com",
-            headers=printful_auth_headers(),
-            timeout=20,
-        ) as c:
-            response = await c.get(f"/orders/{printful_order_id}")
-    except httpx.HTTPError as exc:
-        raise PrintfulVerificationUnavailable("Printful order verification request failed") from exc
-    if response.status_code == 404:
-        return None
-    if response.status_code >= 400:
-        raise PrintfulVerificationUnavailable(
-            f"Printful order verification returned HTTP {response.status_code}"
-        )
-    result = response.json().get("result") or {}
-    if not isinstance(result, dict) or str(result.get("id") or "") != printful_order_id:
-        raise PrintfulVerificationUnavailable("Printful returned a mismatched order identifier")
-    return result
-
-
-def verified_printful_webhook_update(payload: dict, local_order: dict, printful_order: dict) -> Optional[dict]:
-    """Return a safe local update only when the event matches authoritative Printful data."""
-    event_type = str(payload.get("type") or "")
-    policy = PRINTFUL_EVENT_STATUS_POLICY.get(event_type)
-    if not policy:
-        return None
-    data = payload.get("data") or {}
-    payload_order_id = str((data.get("order") or {}).get("id") or "")
-    if not payload_order_id or payload_order_id != str(local_order.get("printful_order_id") or ""):
-        return None
-    if str(printful_order.get("id") or "") != payload_order_id:
-        return None
-
-    # Webhook payloads always identify the store. The authenticated order must agree,
-    # and an account-level token must also be constrained to the configured store.
-    payload_store = str(payload.get("store") or "")
-    authoritative_store = str(printful_order.get("store") or "")
-    if not payload_store or not authoritative_store or payload_store != authoritative_store:
-        return None
-    if PRINTFUL_STORE_ID and authoritative_store != str(PRINTFUL_STORE_ID):
-        return None
-
-    # New orders carry our UUID as Printful external_id. Allow missing external_id only
-    # for legacy orders created before this binding was added; never allow a mismatch.
-    external_id = str(printful_order.get("external_id") or "")
-    if external_id and external_id != str(local_order.get("id") or ""):
-        return None
-
-    allowed_statuses, app_status = policy
-    authoritative_status = str(printful_order.get("status") or "").lower()
-    if authoritative_status not in allowed_statuses:
-        return None
-
-    update = {
-        "status": app_status,
-        "printful_status": authoritative_status,
-        "printful_store_id": authoritative_store,
-        "printful_last_verified_event": event_type,
-        "printful_verified_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if event_type in {"package_shipped", "package_returned"}:
-        payload_shipment_id = str((data.get("shipment") or {}).get("id") or "")
-        shipment = next(
-            (item for item in (printful_order.get("shipments") or [])
-             if str(item.get("id") or "") == payload_shipment_id),
-            None,
-        )
-        if not payload_shipment_id or not shipment:
-            return None
-        if event_type == "package_shipped" and shipment.get("tracking_url"):
-            # The tracking URL comes from the authenticated GET response, not the webhook body.
-            update["tracking_url"] = shipment["tracking_url"]
-    return update
-
-
-@api_router.post("/webhooks/printful")
-async def printful_webhook(payload: dict, token: str = ""):
-    """Apply a Printful event only after an authenticated API cross-check."""
-    # Fail closed: only process when a secret is configured AND the token matches.
-    if not PRINTFUL_WEBHOOK_SECRET or not hmac.compare_digest(
-        token.encode("utf-8"), PRINTFUL_WEBHOOK_SECRET.encode("utf-8")
-    ):
-        logger.warning("Rejected Printful webhook (secret unset or token invalid)")
-        return {"ok": True}
-    event_type = str(payload.get("type") or "")
-    if event_type not in PRINTFUL_EVENT_STATUS_POLICY:
-        return {"ok": True, "verified": False}
-    data = payload.get("data") or {}
-    printful_order_id = str((data.get("order") or {}).get("id") or "")
-    if not printful_order_id.isdigit():
-        return {"ok": True, "verified": False}
-    order = await db.orders.find_one({"printful_order_id": printful_order_id})
-    if not order:
-        return {"ok": True, "verified": False}
-    try:
-        authoritative_order = await fetch_printful_order(printful_order_id)
-    except PrintfulVerificationUnavailable as exc:
-        logger.error("Printful webhook cross-check unavailable: %s", exc)
-        raise HTTPException(status_code=503, detail="Printful verification unavailable") from exc
-    if not authoritative_order:
-        logger.warning("Printful webhook referenced an order absent from the authenticated store")
-        return {"ok": True, "verified": False}
-    update = verified_printful_webhook_update(payload, order, authoritative_order)
-    if not update:
-        logger.warning("Printful webhook did not match authoritative order state")
-        return {"ok": True, "verified": False}
-    result = await db.orders.update_one({"id": order["id"]}, {"$set": update})
-    tracking = str(update.get("tracking_url") or "")
-    if result.modified_count and order.get("user_email"):
-        await send_status_email(order["user_email"], order, update["status"], tracking)
-    logger.info(
-        "Verified Printful webhook %s -> order %s = %s (%s)",
-        event_type, order["id"], update["status"], update["printful_status"],
-    )
-    return {"ok": True, "verified": True}
-
-
-@app.on_event("startup")
-async def register_printful_webhook():
-    """Point the Printful store's webhook at this deployment (idempotent per startup)."""
-    if not (PRINTFUL_TOKEN and PUBLIC_BASE_URL):
-        return
-    tok = f"?token={PRINTFUL_WEBHOOK_SECRET}" if PRINTFUL_WEBHOOK_SECRET else ""
-    url = f"{PUBLIC_BASE_URL}/api/webhooks/printful{tok}"
-    headers = {"Authorization": f"Bearer {PRINTFUL_TOKEN}", "Content-Type": "application/json"}
-    if PRINTFUL_STORE_ID:
-        headers["X-PF-Store-Id"] = PRINTFUL_STORE_ID
-    body = {"url": url, "types": ["package_shipped", "package_returned", "order_failed",
-                                  "order_canceled", "order_put_hold", "order_remove_hold"]}
-    try:
-        async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.post("https://api.printful.com/webhooks", headers=headers, json=body)
-        if r.status_code >= 400:
-            logger.error(f"Printful webhook register failed {r.status_code}: {r.text[:200]}")
-        else:
-            logger.info(f"Printful webhook registered -> {PUBLIC_BASE_URL}/api/webhooks/printful")
-    except Exception as e:
-        logger.error(f"Printful webhook register error: {e}")
 
 
 @app.on_event("startup")

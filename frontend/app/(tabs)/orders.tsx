@@ -21,6 +21,16 @@ export default function Orders() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  const trackOrder = async (orderId: string, fallbackUrl?: string) => {
+    try {
+      const tracking = await api.trackOrder(orderId);
+      const url = tracking.shipments?.find((shipment: any) => shipment.url)?.url || fallbackUrl;
+      if (url) await Linking.openURL(url);
+    } catch {
+      if (fallbackUrl) await Linking.openURL(fallbackUrl);
+    }
+  };
+
   const load = async () => {
     try { setOrders(await api.listOrders()); } catch {}
     finally { setLoading(false); setRefreshing(false); }
@@ -57,7 +67,7 @@ export default function Orders() {
                   <Text style={styles.cardMeta}>{framed ? `${fr} frame · ` : ""}${(o.price || 0).toFixed(2)}</Text>
                   <View style={[styles.badge, { backgroundColor: s.color }]}><Text style={styles.badgeText}>{s.text}</Text></View>
                   {!!o.tracking_url && (
-                    <Pressable testID={`track-${o.id}`} style={styles.track} onPress={() => Linking.openURL(o.tracking_url)}>
+                    <Pressable testID={`track-${o.id}`} style={styles.track} onPress={() => trackOrder(o.id, o.tracking_url)}>
                       <Feather name="truck" size={14} color={colors.brandSecondary} />
                       <Text style={styles.trackText}>Track package</Text>
                     </Pressable>

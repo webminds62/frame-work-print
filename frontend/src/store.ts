@@ -17,12 +17,9 @@ export type Project = {
   store_tier?: string;
   store_image?: string;
   has_mat?: boolean;
-  // Legacy Printful fields (optional until checkout cutover)
-  printful_variant_id?: number;
-  printful_product_id?: number;
-  printful_variant_name?: string;
-  printful_variant_image?: string;
-  printful_retail_price?: number;
+  prodigi_sku?: string;
+  prodigi_variant_name?: string;
+  prodigi_variant_image?: string;
 };
 
 /** Frame picked in the Store before a photo is chosen. */
@@ -76,9 +73,8 @@ export function newProject(image: string): Project {
     store_tier: frame?.store_tier,
     store_image: frame?.store_image,
     has_mat: frame?.has_mat,
-    printful_variant_name: frame?.store_family_name,
-    printful_variant_image: frame?.store_image,
-    printful_retail_price: frame?.price,
+    prodigi_variant_name: frame?.store_family_name,
+    prodigi_variant_image: frame?.store_image,
   };
   return current;
 }

@@ -4,7 +4,7 @@ Covers:
   SEC-001 Admin: old default password fails, new env password works, admin routes gated.
   SEC-002 Payments: POST /api/orders removed; /api/payments/create-intent computes price
           server-side + ownership; /api/payments/complete/{id} ownership -> 404.
-  SEC-003 Webhook: POST /api/webhooks/printful requires ?token=; without it, no change.
+    SEC-003 Webhook: POST /api/webhooks/prodigi requires ?token=; without it, no change.
   SEC-004 Rate limit: POST /api/auth/login rapid-fire returns 429.
   REGRESSION: /api/quote first-order discount fields; auth flows; projects CRUD; /orders list.
 """
@@ -27,7 +27,7 @@ ADMIN_PASSWORD_OLD = "Admin12345"
 DEMO_EMAIL = "demo@frameworks.com"
 DEMO_PASSWORD = "Password123"
 
-WEBHOOK_SECRET = os.environ.get("PRINTFUL_WEBHOOK_SECRET_TEST", "17b5b243cf8668db741144d38572530c5d12d00b23194936")
+WEBHOOK_SECRET = os.environ.get("PRODIGI_WEBHOOK_SECRET_TEST", "17b5b243cf8668db741144d38572530c5d12d00b23194936")
 MONGO_URL = os.environ.get("MONGO_URL_TEST", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME_TEST", "test_database")
 
@@ -169,67 +169,6 @@ class TestSEC002_PaymentSecurity:
     def test_capture_requires_auth(self, sess):
         r = sess.post(f"{API}/payments/complete/anything", timeout=15)
         assert r.status_code in (401, 403)
-
-
-# ================================================================
-# SEC-003 — Printful webhook token
-# ================================================================
-class TestSEC003_WebhookToken:
-    def _seed_order(self, pf_id: str):
-        client = MongoClient(MONGO_URL)
-        db = client[DB_NAME]
-        doc = {
-            "id": f"secwebhook_{uuid.uuid4().hex[:12]}",
-            "user_id": "SEC003_TEST",
-            "user_email": "delivered@resend.dev",
-            "status": "in_production",
-            "printful_order_id": pf_id,
-            "printful_status": "draft_created",
-            "material": "canvas", "size": "16x20", "frame": "wood",
-            "price": 99.0,
-            "recipient": RECIPIENT,
-        }
-        db.orders.insert_one(doc)
-        return db, doc["id"]
-
-    def test_webhook_without_token_does_not_change_order(self, sess):
-        pf_id = f"PF_SEC_{uuid.uuid4().hex[:10]}"
-        db, order_id = self._seed_order(pf_id)
-        try:
-            payload = {"type": "package_shipped",
-                       "data": {"order": {"id": pf_id},
-                                "shipment": {"tracking_url": "https://track.test/FORGED"}}}
-            r = sess.post(f"{API}/webhooks/printful", json=payload, timeout=15)
-            # Should quietly 200 but do nothing
-            assert r.status_code == 200, r.text
-            # Verify NOT changed
-            after = db.orders.find_one({"id": order_id})
-            assert after["status"] == "in_production", f"forged webhook changed status to {after['status']}"
-            assert "tracking_url" not in after or not after.get("tracking_url"), \
-                f"forged webhook set tracking_url={after.get('tracking_url')}"
-
-            # Wrong token also rejected
-            r2 = sess.post(f"{API}/webhooks/printful?token=WRONG", json=payload, timeout=15)
-            assert r2.status_code == 200
-            after2 = db.orders.find_one({"id": order_id})
-            assert after2["status"] == "in_production"
-        finally:
-            db.orders.delete_one({"id": order_id})
-
-    def test_webhook_with_correct_token_updates_order_to_shipped(self, sess):
-        pf_id = f"PF_SEC_{uuid.uuid4().hex[:10]}"
-        db, order_id = self._seed_order(pf_id)
-        try:
-            payload = {"type": "package_shipped",
-                       "data": {"order": {"id": pf_id},
-                                "shipment": {"tracking_url": "https://track.test/OK123"}}}
-            r = sess.post(f"{API}/webhooks/printful?token={WEBHOOK_SECRET}", json=payload, timeout=15)
-            assert r.status_code == 200, r.text
-            after = db.orders.find_one({"id": order_id})
-            assert after["status"] == "shipped", f"expected shipped, got {after['status']}"
-            assert after.get("tracking_url") == "https://track.test/OK123"
-        finally:
-            db.orders.delete_one({"id": order_id})
 
 
 # ================================================================

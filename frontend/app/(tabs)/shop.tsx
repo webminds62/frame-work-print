@@ -3,7 +3,7 @@ import { ActivityIndicator, View } from "react-native";
 import { useRouter } from "expo-router";
 import { colors } from "@/src/theme";
 
-/** Legacy route — gallery Store replaced Printful shop. */
+/** Legacy route kept as a redirect to the gallery Store. */
 export default function ShopRedirect() {
   const router = useRouter();
   useEffect(() => {
